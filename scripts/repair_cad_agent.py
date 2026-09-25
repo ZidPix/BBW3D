@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".pytest_cache"}
@@ -119,17 +118,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", help="path to the cad-agent checkout")
     parser.add_argument("--dry-run", action="store_true",
                         help="report what would change without writing")
+    parser.add_argument("--report", help="write the JSON report to this file")
+    parser.add_argument("--json", action="store_true",
+                        help="print the JSON report to stdout as well")
     args = parser.parse_args(argv)
 
     report = repair_tree(Path(args.path), dry_run=args.dry_run)
-    print(json.dumps(report, indent=2))
+    payload = json.dumps(report, indent=2)
 
-    if report.get("repaired"):
-        print(f"\nRepaired {len(report['repaired'])} file(s) - the image must be "
-              "rebuilt for this to take effect.", file=sys.stderr)
-    if report.get("still_broken"):
-        print(f"\n{len(report['still_broken'])} file(s) still do not compile. "
-              "These need a human.", file=sys.stderr)
+    if args.report:
+        out = Path(args.report)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload + "\n", encoding="utf-8")
+    if args.json or not args.report:
+        print(payload)
+
+    # Everything goes to stdout. Writing progress to stderr makes PowerShell
+    # abort the calling script under $ErrorActionPreference = 'Stop'.
+    if report.get("error"):
+        print(f"ERROR: {report['error']}")
+    for entry in report.get("repaired", []):
+        print(f"REPAIRED {entry['file']}: {entry['fix']} "
+              f"({entry['replacements']} occurrences) - was {entry['was']}")
+    for entry in report.get("still_broken", []):
+        print(f"STILL BROKEN {entry['file']}: {entry['error']}")
+    print(f"SUMMARY checked={report.get('checked', 0)} "
+          f"already_ok={report.get('already_ok', 0)} "
+          f"repaired={len(report.get('repaired', []))} "
+          f"still_broken={len(report.get('still_broken', []))}")
     return 0 if report.get("ok") else 1
 
 

@@ -47,6 +47,26 @@ function Test-Command ([string] $Name) {
     $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Invoke-Native ([scriptblock] $Action) {
+    <#
+        Capture a native command's combined output as text.
+
+        Under $ErrorActionPreference = 'Stop', redirecting a native command's
+        stderr with 2>&1 turns ANY stderr output into a terminating error -
+        even a progress line from a command that succeeded. Drop to 'Continue'
+        for the call and let the exit code decide instead.
+    #>
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $script:NativeOutput = (& $Action 2>&1 | Out-String)
+        $script:NativeExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    return $script:NativeOutput
+}
+
 function Resolve-Docker {
     <#
         Docker Desktop can be installed and running while docker.exe is absent
@@ -174,21 +194,20 @@ if ($repaired.Count -gt 0) {
 # SyntaxError - the server crash-loops before it can listen. Repair only the
 # files that do not compile, and only where the fix makes them compile.
 Write-Step "Checking cad-agent's Python sources compile"
-$repairOut = & $Python (Join-Path $RepoRoot "scripts\repair_cad_agent.py") $CadAgentPath 2>&1 | Out-String
-$repairExit = $LASTEXITCODE
 $repairLog = Join-Path (Join-Path $RepoRoot "out") "cad-agent-repair.json"
 New-Item -ItemType Directory -Force -Path (Split-Path $repairLog) | Out-Null
-$repairOut | Set-Content -Path $repairLog
+$repairScript = Join-Path $RepoRoot "scripts\repair_cad_agent.py"
+$repairOut = Invoke-Native { & $Python $repairScript $CadAgentPath --report $repairLog }
+$repairExit = $script:NativeExit
+Write-Host $repairOut.TrimEnd()
 
-if ($repairOut -match '"repaired": \[\s*\]') {
+if ($repairOut -match "repaired=0") {
     Write-Ok "all sources compile"
 } else {
-    Write-Warn2 "Repaired escaped-quote artifacts in cad-agent's sources (forcing a rebuild)"
-    Write-Host $repairOut
+    Write-Warn2 "Repaired cad-agent sources that did not compile (forcing a rebuild)"
     $script:ForceRebuild = $true
 }
 if ($repairExit -ne 0) {
-    Write-Host $repairOut
     Stop-With "Some cad-agent sources still do not compile." `
               "Full report: $repairLog - send it to me."
 }
@@ -249,7 +268,7 @@ if (-not $healthy) {
         "" | Add-Content -Path $diag
         "--- $Title ---" | Add-Content -Path $diag
         try {
-            $output = & $Action 2>&1 | Out-String
+            $output = Invoke-Native $Action
         } catch {
             $output = "(command failed: $_)"
         }
@@ -281,8 +300,12 @@ $outDir = Join-Path $RepoRoot "out"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $report = Join-Path $outDir "verify-report.json"
 
-& $Python -m bbw3d.cli verify | Tee-Object -FilePath $report
-$verifyExit = $LASTEXITCODE
+# Invoke-Native so that a client-side error message on stderr cannot abort the
+# script before the report is written - the report is the whole point.
+$verifyOut = Invoke-Native { & $Python -m bbw3d.cli verify }
+$verifyExit = $script:NativeExit
+$verifyOut | Set-Content -Path $report
+Write-Host $verifyOut.TrimEnd()
 
 Write-Host ""
 if ($verifyExit -eq 0) {
