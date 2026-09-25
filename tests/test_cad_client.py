@@ -114,10 +114,12 @@ class TestCadClientContract(unittest.TestCase):
         self.assertEqual(t.calls[0]["method"], "POST")
         self.assertEqual(t.calls[0]["payload"], {"name": "widget", "code": "code()"})
 
-    def test_render_uses_model_name_key(self):
+    def test_render_tries_the_verified_model_key_first(self):
+        """The live container ignored `model_name` and fell back to its own
+        default model, so `name` is tried first now."""
         t = recorder(json_response({"image": base64.b64encode(PNG).decode()}))
         result = CadClient(transport=t).render("widget", kind="3d", view="front")
-        self.assertEqual(t.calls[0]["payload"], {"model_name": "widget", "view": "front"})
+        self.assertEqual(t.calls[0]["payload"], {"name": "widget", "view": "front"})
         self.assertTrue(t.calls[0]["url"].endswith("/render/3d"))
         self.assertEqual(result.kind, "3d")
         self.assertEqual(len(result.images), 1)

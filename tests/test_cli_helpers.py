@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bbw3d.cli import _clean_label, _prune, build_parser  # noqa: E402
-from bbw3d.verify import PROBE_CODE, _shape  # noqa: E402
+from bbw3d.verify import PROBE_DIALECTS, _shape  # noqa: E402
 
 
 class TestPrune(unittest.TestCase):
@@ -68,8 +68,10 @@ class TestVerifyShape(unittest.TestCase):
     def test_bytes_summarised(self):
         self.assertEqual(_shape(b"abcd"), "<4 bytes>")
 
-    def test_probe_code_is_valid_python(self):
-        compile(PROBE_CODE, "probe", "exec")
+    def test_every_probe_dialect_is_valid_python(self):
+        for name, code in PROBE_DIALECTS:
+            with self.subTest(dialect=name):
+                compile(code, f"probe-{name}", "exec")
 
 
 if __name__ == "__main__":

@@ -111,14 +111,21 @@ not printable and why.
 5. **State assumptions, don't stall.** One clarifying question, maximum.
 6. **5 rounds, then report.** Converging or not, you stop and tell me.
 7. **Printability gate before export.** No silent failures.
-8. **All CAD stays in the container.** No local mesh or STL work.
+8. **All CAD stays in the container.** No local mesh or STL work. When it
+   refuses something it answers HTTP 200 with `success: false` - `bbw3d`
+   raises on that, and the `error` text says exactly what it objected to.
 9. **Never commit output.** `out/` is gitignored. Models are artifacts, not source.
 10. **Report honestly.** "Matches the drawing except the fillet radius, which I
     estimated at 2mm" beats "Done!". If you guessed, say you guessed.
 
 ## build123d notes
 
-- `from build123d import *`, then `with BuildPart() as part:`
+- **Never write `import` anything.** The container's security filter refuses it
+  ("Security Error: Forbidden keyword 'import ' detected") and answers HTTP 200
+  while doing so. build123d is already in the namespace: use `Box`, `BuildPart`,
+  `extrude` directly. `bbw3d verify` reports the dialect this container accepts
+  under `working_dialect` - write in that one.
+- `with BuildPart() as part:` to open a model
 - Sketch on a face, then `extrude(amount=-n, mode=Mode.SUBTRACT)` for pockets and holes
 - `fillet` / `chamfer` take edge selections: `part.edges().filter_by(Axis.Z)`
 - Millimetres throughout. Keep dimensions as named constants at the top of the

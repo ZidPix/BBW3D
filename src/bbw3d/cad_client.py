@@ -35,9 +35,20 @@ EP_MULTIVIEW = "/render/multiview"
 EP_EXPORT = "/export"
 EP_PRINTABILITY = "/analyze/printability"
 
-#: Per SKILL.md: create/modify take `name`, renders/export take `model_name`.
-KEY_MODEL_WRITE = "name"
-KEY_MODEL_READ = "model_name"
+#: Verified against a live container 2026-09-25 (out/verify-report.json):
+#: `model_name` was NOT honoured - /export fell back to model "None" and
+#: /analyze/printability to model "active". `name` is tried first and the
+#: working key is remembered; MODEL_KEYS is the fallback order.
+MODEL_KEYS = ("name", "model_name")
+
+#: Phrases the server uses when it did not find the model we asked for. Seen:
+#: "No model available", "No model 'None' available", "No model 'active' found".
+_MISSING_MODEL = ("no model",)
+
+#: The container rejects submitted code containing these. Seen: 'import '.
+#: Code sent to /model/create must therefore use the pre-populated namespace
+#: rather than importing build123d itself.
+FORBIDDEN_IN_CODE = ("import ",)
 
 RENDER_KINDS = {
     "3d": EP_RENDER_3D,
@@ -151,6 +162,40 @@ def slug(text: str) -> str:
 
 # --- client ----------------------------------------------------------------
 
+def _json_or_empty(resp: Response) -> dict:
+    """Parse JSON defensively - a render may legitimately be raw bytes."""
+    if resp.body[:8] == _PNG_MAGIC:
+        return {}
+    try:
+        return resp.json()
+    except Bbw3dError:
+        return {}
+
+
+def says_missing_model(resp: Response) -> bool:
+    """True when the server answered about a different model than we asked for.
+
+    That is how it reports an unrecognised payload key: it falls back to its
+    own default (None, or "active") instead of rejecting the request.
+    """
+    error = str(_json_or_empty(resp).get("error", "")).lower()
+    return any(phrase in error for phrase in _MISSING_MODEL)
+
+
+def raise_if_failed(data: dict, what: str) -> dict:
+    """The container answers HTTP 200 with success=false on refusal.
+
+    Checking only the status code is how a refused create looked like a
+    working one, and every later call then failed with "No model available".
+    """
+    if data.get("success") is False:
+        detail = data.get("error") or data.get("output") or "(no detail given)"
+        raise Bbw3dError(f"{what} was refused by the container: {detail}")
+    if data.get("error") and "success" not in data:
+        raise Bbw3dError(f"{what} failed: {data['error']}")
+    return data
+
+
 @dataclass
 class RenderResult:
     kind: str
@@ -167,6 +212,9 @@ class CadClient:
     timeout: float = config.HTTP_TIMEOUT
     transport: Transport = request
     search_roots: list[Path] = field(default_factory=config.search_roots)
+    #: Which key this container honours for the model name. Discovered on first
+    #: use and then reused, so later calls cost one request instead of two.
+    model_key: str | None = None
 
     # -- plumbing
     def _url(self, path: str) -> str:
@@ -189,23 +237,60 @@ class CadClient:
     def measure(self, name: str) -> dict:
         return self._get(EP_MEASURE.format(name=name)).raise_for_status().json()
 
+    def _post_for_model(self, path: str, name: str, extra: dict | None = None) -> Response:
+        """POST a model-scoped request, discovering which name key is honoured.
+
+        An unrecognised key is not rejected: the server quietly substitutes its
+        own default model, so a wrong key looks like a missing model. Try the
+        candidates until one answers about the model we actually asked for.
+        """
+        keys = [self.model_key] if self.model_key else list(MODEL_KEYS)
+        last: Response | None = None
+        for key in keys:
+            payload: dict = {key: name}
+            if extra:
+                payload.update(extra)
+            resp = self._post(path, payload)
+            if resp.ok and not says_missing_model(resp):
+                self.model_key = key
+                return resp
+            last = resp
+        return last if last is not None else resp
+
     # -- modeling
+    def check_code(self, code: str) -> None:
+        """Fail fast on code the container's security filter will refuse."""
+        for banned in FORBIDDEN_IN_CODE:
+            if banned in code:
+                raise Bbw3dError(
+                    f"Code contains {banned.strip()!r}, which the container refuses "
+                    "(Security Error: Forbidden keyword). build123d is already "
+                    "available in the execution namespace - drop the import line.")
+
     def create(self, name: str, code: str) -> dict:
-        return self._post(EP_CREATE, {KEY_MODEL_WRITE: name, "code": code}).raise_for_status().json()
+        self.check_code(code)
+        resp = self._post_for_model(EP_CREATE, name, {"code": code}).raise_for_status()
+        return raise_if_failed(resp.json(), f"create {name!r}")
 
     def modify(self, name: str, code: str) -> dict:
-        return self._post(EP_MODIFY, {KEY_MODEL_WRITE: name, "code": code}).raise_for_status().json()
+        self.check_code(code)
+        resp = self._post_for_model(EP_MODIFY, name, {"code": code}).raise_for_status()
+        return raise_if_failed(resp.json(), f"modify {name!r}")
 
     # -- looking at it
     def render(self, name: str, kind: str = "multiview", view: str | None = None) -> RenderResult:
         if kind not in RENDER_KINDS:
             raise Bbw3dError(f"Unknown render kind {kind!r}; pick one of {sorted(RENDER_KINDS)}")
-        payload: dict = {KEY_MODEL_READ: name}
-        if view:
-            payload["view"] = view
-        resp = self._post(RENDER_KINDS[kind], payload).raise_for_status()
+        extra = {"view": view} if view else None
+        resp = self._post_for_model(RENDER_KINDS[kind], name, extra)
+        if resp.status == 404:
+            raise Bbw3dError(
+                f"This container has no {RENDER_KINDS[kind]} endpoint (404). "
+                f"Available render kinds are discovered by `bbw3d verify`.")
+        resp.raise_for_status()
+        raise_if_failed(_json_or_empty(resp), f"{kind} render of {name!r}")
         images = extract_assets(resp, _IMAGE_SUFFIXES, self.search_roots)
-        meta = {} if resp.content_type.startswith("image/") else resp.json()
+        meta = _json_or_empty(resp)
         if not images:
             raise Bbw3dError(
                 f"{kind} render for {name!r} returned no image. Response keys: "
@@ -215,13 +300,14 @@ class CadClient:
 
     # -- verdicts and output
     def printability(self, name: str) -> dict:
-        return self._post(EP_PRINTABILITY, {KEY_MODEL_READ: name}).raise_for_status().json()
+        resp = self._post_for_model(EP_PRINTABILITY, name).raise_for_status()
+        return raise_if_failed(resp.json(), f"printability of {name!r}")
 
     def export(self, name: str, fmt: str = "stl") -> tuple[dict, list[tuple[str, bytes]]]:
         fmt = fmt.lower()
         if fmt not in EXPORT_FORMATS:
             raise Bbw3dError(f"Unknown format {fmt!r}; pick one of {EXPORT_FORMATS}")
-        resp = self._post(EP_EXPORT, {KEY_MODEL_READ: name, "format": fmt}).raise_for_status()
+        resp = self._post_for_model(EP_EXPORT, name, {"format": fmt}).raise_for_status()
         assets = extract_assets(resp, _MESH_SUFFIXES, self.search_roots)
         meta = {} if resp.content_type.startswith(("model/", "application/octet-stream")) else resp.json()
         return meta, assets
