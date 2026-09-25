@@ -65,7 +65,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
 
 Useful switches: `-CadAgentPath C:\dev\cad-agent` to put the clone elsewhere,
-`-SkipBuild` to restart and re-verify without rebuilding the image.
+`-SkipBuild` to restart and re-verify without rebuilding the image, and
+`-Diagnose` when something misbehaves:
+
+```powershell
+.\scripts\setup.ps1 -Diagnose
+```
+
+That builds and restarts nothing. It collects the container's logs (where the
+traceback behind an empty HTTP 500 actually lives), a report on how cad-agent
+executes submitted code (what its sandbox forbids, what its namespace holds,
+which variable it reads the model out of), and a fresh `bbw3d verify` - all into
+`out\diagnose.txt`.
 
 > Note for PowerShell 5.1 (the blue-icon "Windows PowerShell"): `&&` between
 > commands is a syntax error there — it only works in PowerShell 7+. Use `;`, or

@@ -28,6 +28,7 @@
 param(
     [string] $CadAgentPath = "",
     [switch] $SkipBuild,
+    [switch] $Diagnose,
     [string] $Python = ""
 )
 
@@ -188,6 +189,38 @@ if ($repaired.Count -gt 0) {
     $script:ForceRebuild = $true
 } else {
     Write-Ok "shell scripts have Unix line endings"
+}
+
+if ($Diagnose) {
+    Write-Step "Diagnostics only - nothing will be rebuilt or restarted"
+    $diagDir = Join-Path $RepoRoot "out"
+    New-Item -ItemType Directory -Force -Path $diagDir | Out-Null
+    $diagFile = Join-Path $diagDir "diagnose.txt"
+    "BBW3D diagnostics - $(Get-Date -Format s)" | Set-Content -Path $diagFile
+
+    function Add-Section ([string] $Title, [scriptblock] $Action) {
+        Write-Host ""
+        Write-Host "--- $Title ---" -ForegroundColor Yellow
+        "" | Add-Content -Path $diagFile
+        "=== $Title ===" | Add-Content -Path $diagFile
+        try { $text = Invoke-Native $Action } catch { $text = "(failed: $_)" }
+        Write-Host $text.TrimEnd()
+        $text | Add-Content -Path $diagFile
+    }
+
+    # The 500 has an empty body; the traceback only exists in the logs.
+    Add-Section "container logs (last 80 lines)" { & $Docker compose logs --tail 80 }
+    # What the sandbox forbids, what the namespace holds, and what variable it
+    # reads the finished model out of - none of which is documented.
+    Add-Section "how cad-agent executes submitted code" {
+        & $Python (Join-Path $RepoRoot "scripts\inspect_cad_agent.py") $CadAgentPath
+    }
+    Add-Section "bbw3d verify" { & $Python -m bbw3d.cli verify }
+
+    Write-Host ""
+    Write-Host "Saved to: $diagFile" -ForegroundColor Cyan
+    Write-Host "Send me that one file - it has the traceback, the sandbox rules and the probe." -ForegroundColor Cyan
+    exit 0
 }
 
 # cad-agent's published .py files contain backslash-escaped quotes, which is a
