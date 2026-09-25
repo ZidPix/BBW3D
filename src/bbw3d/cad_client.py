@@ -48,7 +48,15 @@ _MISSING_MODEL = ("no model",)
 #: The container rejects submitted code containing these. Seen: 'import '.
 #: Code sent to /model/create must therefore use the pre-populated namespace
 #: rather than importing build123d itself.
-FORBIDDEN_IN_CODE = ("import ",)
+#: The exact blacklist from cad_engine.py's execute_code, read from the live
+#: checkout. These are plain substring checks, so they also match innocent code:
+#: a variable named `pos` followed by a dot contains "os.".
+FORBIDDEN_IN_CODE = ("import ", "eval(", "exec(", "os.", "subprocess",
+                     "open(", "write(", "read(", "socket")
+
+#: execute_code looks for the finished model in the namespace and warns
+#: "Assign to 'result' variable" when it cannot find one.
+RESULT_VARIABLE = "result"
 
 RENDER_KINDS = {
     "3d": EP_RENDER_3D,
@@ -259,13 +267,26 @@ class CadClient:
 
     # -- modeling
     def check_code(self, code: str) -> None:
-        """Fail fast on code the container's security filter will refuse."""
-        for banned in FORBIDDEN_IN_CODE:
-            if banned in code:
-                raise Bbw3dError(
-                    f"Code contains {banned.strip()!r}, which the container refuses "
-                    "(Security Error: Forbidden keyword). build123d is already "
-                    "available in the execution namespace - drop the import line.")
+        """Fail fast on code the container's security filter will refuse.
+
+        Cheaper to catch here than to spend a round trip on a refusal, and the
+        message can say what to do instead.
+        """
+        hits = [banned for banned in FORBIDDEN_IN_CODE if banned in code]
+        if not hits:
+            return
+        advice = {
+            "import ": "build123d is already in the namespace - drop the import line",
+            "os.": "this also matches innocent code such as a variable named 'pos' "
+                   "followed by a dot; rename the variable",
+            "read(": "substring match - rename any method or variable containing it",
+            "write(": "substring match - rename any method or variable containing it",
+        }
+        detail = "; ".join(
+            f"{h.strip()!r}" + (f" ({advice[h]})" if h in advice else "") for h in hits)
+        raise Bbw3dError(
+            f"The container's security filter would refuse this code: {detail}. "
+            f"Its blacklist is a plain substring check over {list(FORBIDDEN_IN_CODE)}.")
 
     def create(self, name: str, code: str) -> dict:
         self.check_code(code)

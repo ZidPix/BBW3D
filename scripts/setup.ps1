@@ -245,6 +245,26 @@ if ($repairExit -ne 0) {
               "Full report: $repairLog - send it to me."
 }
 
+# cad-agent's _build_namespace runs an import statement inside a __builtins__
+# dict that has no __import__, so every request died with a RuntimeError about
+# build123d not being available, and no model could ever be created.
+Write-Step "Applying known cad-agent fixes"
+$patchLog = Join-Path (Join-Path $RepoRoot "out") "cad-agent-patches.json"
+$patchScript = Join-Path $RepoRoot "scripts\patch_cad_agent.py"
+$patchOut = Invoke-Native { & $Python $patchScript $CadAgentPath --report $patchLog }
+$patchExit = $script:NativeExit
+Write-Host $patchOut.TrimEnd()
+if ($patchOut -match "applied=0") {
+    Write-Ok "no new fixes needed"
+} else {
+    Write-Warn2 "Patched cad-agent (forcing a rebuild)"
+    $script:ForceRebuild = $true
+}
+if ($patchExit -ne 0) {
+    Stop-With "A cad-agent patch could not be applied." `
+              "Full report: $patchLog - send it to me."
+}
+
 # --- build the image --------------------------------------------------------
 
 if ($SkipBuild -and -not $script:ForceRebuild) {

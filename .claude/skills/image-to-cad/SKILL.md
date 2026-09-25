@@ -37,12 +37,43 @@ Then, before coding, answer these explicitly:
 5. **What's hidden?** Name it. Hidden geometry is where confident wrong models
    come from.
 
+## Two rules the container enforces silently
+
+### 1. No import statements. Ever.
+
+Submitted code goes through a substring blacklist, read from `cad_engine.py`:
+
+```python
+['import ', 'eval(', 'exec(', 'os.', 'subprocess', 'open(', 'write(', 'read(', 'socket']
+```
+
+A match returns **HTTP 200** with `success: false` in the body, so a refusal can
+easily read as a success. These are plain substring checks, so they catch
+innocent code too: a variable named `pos` followed by a dot contains `os.`, and
+any method called `read(` or `write(` trips it.
+
+**build123d is already in the execution namespace.** Use `Box`, `BuildPart`,
+`extrude` and the rest directly, with no import line at all. `bbw3d` checks your
+code against the list before sending and names the offender.
+
+### 2. Assign the finished model to `result`
+
+`execute_code` searches the namespace for the shape you built. When it finds
+none it *still returns success*, with the warning buried in `output`:
+
+```
+[Warning: No 3D shape found in result. Assign to 'result' variable.]
+```
+
+A model that "succeeded" with no geometry fails confusingly at render time. End
+every submission with an explicit assignment.
+
 ## build123d that survives critique
 
 Constants at the top. Every critique round should be a one-line change.
 
 ```python
-from build123d import *
+# NO import line - the container refuses it, and build123d is already loaded.
 
 # --- dimensions (mm) — from the sketch unless noted
 WIDTH      = 70.0
@@ -68,6 +99,8 @@ with BuildPart() as part:
 
     # edge treatment last
     fillet(part.edges().filter_by(Axis.Z), radius=2.0)
+
+result = part.part          # <- the container keeps whatever lands here
 ```
 
 Patterns worth knowing:
