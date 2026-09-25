@@ -188,8 +188,42 @@ for ($i = 1; $i -le 40; $i++) {
 }
 if (-not $healthy) {
     Write-Warn2 "No answer on http://localhost:8123/health after ~2 minutes."
-    Write-Warn2 "Check the container's own logs:   docker compose logs --tail 50"
-    Stop-With "Container never came up." "Send me the output of: docker compose logs --tail 50"
+    Write-Host ""
+    Write-Host "Collecting diagnostics..." -ForegroundColor Yellow
+
+    $diagDir = Join-Path $RepoRoot "out"
+    New-Item -ItemType Directory -Force -Path $diagDir | Out-Null
+    $diag = Join-Path $diagDir "container-diagnostics.txt"
+    "BBW3D container diagnostics - $(Get-Date -Format s)" | Set-Content -Path $diag
+
+    function Add-Diag ([string] $Title, [scriptblock] $Action) {
+        Write-Host ""
+        Write-Host "--- $Title ---" -ForegroundColor Yellow
+        "" | Add-Content -Path $diag
+        "--- $Title ---" | Add-Content -Path $diag
+        try {
+            $output = & $Action 2>&1 | Out-String
+        } catch {
+            $output = "(command failed: $_)"
+        }
+        Write-Host $output
+        $output | Add-Content -Path $diag
+    }
+
+    Add-Diag "docker compose ps" { & $Docker compose ps -a }
+    Add-Diag "docker compose logs (last 60 lines)" { & $Docker compose logs --tail 60 }
+    # If this answers but localhost does not, the server is bound to 127.0.0.1
+    # inside the container and the published port cannot reach it.
+    Add-Diag "health probe from INSIDE the container" {
+        & $Docker compose exec -T cad-agent python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8123/health').read())"
+    }
+    Add-Diag "what the container is listening on" {
+        & $Docker compose exec -T cad-agent sh -c "ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null || echo '(no ss/netstat in image)'"
+    }
+
+    Write-Host ""
+    Write-Host "Saved to: $diag" -ForegroundColor Cyan
+    Stop-With "Container never answered on port 8123." "Send me $diag - it has everything needed to work out why."
 }
 Write-Ok "container is healthy"
 
