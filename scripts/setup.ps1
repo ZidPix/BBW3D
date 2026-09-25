@@ -47,6 +47,32 @@ function Test-Command ([string] $Name) {
     $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Resolve-Docker {
+    <#
+        Docker Desktop can be installed and running while docker.exe is absent
+        from THIS shell's PATH - Windows snapshots PATH when a process starts,
+        so any terminal opened before the install cannot see it. Fall back to
+        the standard install locations rather than claiming Docker is missing.
+    #>
+    if (Test-Command "docker") { return "docker" }
+
+    $roots = @(
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)},
+        $env:LOCALAPPDATA,
+        "C:\Program Files"
+    ) | Where-Object { $_ }
+
+    foreach ($root in $roots) {
+        $candidate = "$root\Docker\Docker\resources\bin\docker.exe"
+        if (Test-Path $candidate) { return $candidate }
+    }
+    if (Test-Path "C:\ProgramData\DockerDesktop\version-bin\docker.exe") {
+        return "C:\ProgramData\DockerDesktop\version-bin\docker.exe"
+    }
+    return $null
+}
+
 # --- where are we -----------------------------------------------------------
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -68,13 +94,16 @@ if (-not (Test-Command "git")) {
 }
 Write-Ok "git"
 
-if (-not (Test-Command "docker")) {
-    Stop-With "docker not found." "Install Docker Desktop: https://docs.docker.com/desktop/install/windows-install/"
+$Docker = Resolve-Docker
+if (-not $Docker) {
+    Stop-With "docker.exe not found, on PATH or in the usual install locations." `
+              "If Docker Desktop IS installed, open a NEW PowerShell window and re-run - Windows caches PATH per session, so a shell opened before the install cannot see it. Otherwise install Docker Desktop: https://docs.docker.com/desktop/install/windows-install/"
 }
+if ($Docker -ne "docker") { Write-Warn2 "docker not on PATH; using $Docker" }
 
-docker info *> $null
+& $Docker info *> $null
 if ($LASTEXITCODE -ne 0) {
-    Stop-With "Docker is installed but not running." `
+    Stop-With "Docker is installed but the daemon is not responding." `
               "Start Docker Desktop, wait for the whale icon to settle, then re-run this script."
 }
 Write-Ok "docker (daemon responding)"
@@ -123,7 +152,7 @@ if ($SkipBuild) {
     Write-Step "Skipping docker build (-SkipBuild)"
 } else {
     Write-Step "Building cad-agent:latest (first run takes several minutes)"
-    docker build -t cad-agent:latest $CadAgentPath
+    & $Docker build -t cad-agent:latest $CadAgentPath
     if ($LASTEXITCODE -ne 0) { Stop-With "docker build failed (see above)." "" }
     Write-Ok "image built"
 }
@@ -132,7 +161,7 @@ if ($SkipBuild) {
 
 Write-Step "Starting the container"
 New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot "workspace") | Out-Null
-docker compose up -d
+& $Docker compose up -d
 if ($LASTEXITCODE -ne 0) { Stop-With "docker compose up failed (see above)." "" }
 Write-Ok "compose up"
 
