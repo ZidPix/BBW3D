@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     One-shot BBW3D setup for Windows: clone cad-agent, build it, start it,
     install the toolbelt, and run the endpoint verification.
@@ -8,7 +8,7 @@
 
         .\scripts\setup.ps1
 
-    Everything is idempotent — safe to re-run. Nothing is installed globally
+    Everything is idempotent - safe to re-run. Nothing is installed globally
     except the bbw3d package itself (editable, from this folder).
 
 .PARAMETER CadAgentPath
@@ -176,7 +176,7 @@ Write-Host ""
 if ($verifyExit -eq 0) {
     Write-Host "All documented endpoints answered." -ForegroundColor Green
 } else {
-    Write-Host "Some endpoints did not behave as documented — that is exactly what this check is for." -ForegroundColor Yellow
+    Write-Host "Some endpoints did not behave as documented - that is exactly what this check is for." -ForegroundColor Yellow
 }
 Write-Host "Report saved to: $report" -ForegroundColor Cyan
 Write-Host "Send me that file (or paste it) and I'll correct the client." -ForegroundColor Cyan
