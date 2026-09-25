@@ -1,7 +1,27 @@
 # BBW3D — Image → 3D Model Spin-Off
 
-**Status:** Plan only. No code written yet.
+**Status:** Decisions locked, scaffold built. Milestone 0 (verify against a live container) is next and must run on your machine.
 **Date:** 2026-09-25
+
+---
+
+## 0. Decisions (locked 2026-09-25)
+
+| Question | Decision |
+|---|---|
+| Where does it live? | **This repo**, renamed `SpicyBookclub-` → **`BBW3D`**. It was empty, so nothing is lost. |
+| Primary output | **Printable STL.** Lane B (parametric CAD) is the priority; the generative GLB lane is deferred. |
+| Where does the container run? | **Your machine only.** No hosted VM, no deploy target, nothing to pay for. |
+| cad-agent as-is, or clean-room? | **As-is for now** — free at our size, and Lane B is worthless without its render loop. Revisit before anything public or paid. Flagging rather than blocking, since you didn't call this one; say the word if you want the clean-room path instead. |
+
+**Renaming the repo** (GitHub → Settings → General → Repository name). Existing
+clones then need `git remote set-url origin https://github.com/ZidPix/BBW3D`.
+GitHub redirects the old URL, so nothing breaks immediately. I have not renamed
+it myself — that's your account, and it would cut this session's own remote.
+
+### What that reordering means
+Printable-STL-first flips the milestone order: **Lane B goes first, the generative
+GLB lane goes last.** Everything below reflects that.
 **Scope:** A standalone, lightweight project that takes a flat image (PNG / JPG / WEBP / SVG) and produces a 3D model. Deliberately **not** embedded in core BBW — separate repo, separate deploy, separate deps.
 
 ---
@@ -102,38 +122,68 @@ Classify the uploaded image first, then pick a lane:
 
 ## 3. Repo and shape
 
-**New repo: `ZidPix/bbw3d`.** Not a folder in core BBW, not a shared dep. Zero imports between them. If they ever need to talk, it's over HTTP with a signed URL — nothing tighter.
+**This repo, renamed `BBW3D`.** Not a folder in core BBW, not a shared dep. Zero imports between them. If they ever need to talk, it's over HTTP — nothing tighter.
+
+This is what got built (✅) and what is still notional (○):
 
 ```
-bbw3d/
+BBW3D/
 ├── .claude/
-│   ├── agents/
-│   │   └── 3d-designer.md          # the agent (see §4)
-│   └── skills/
-│       ├── image-to-cad/SKILL.md   # Lane B: vision→build123d→iterate
-│       └── image-to-mesh/SKILL.md  # Lane A: gen-3D→cleanup→export
+│   ├── agents/3d-designer.md        ✅ the designer: rules, loop, stop conditions
+│   └── skills/image-to-cad/         ✅ reading a design image + build123d patterns
 ├── src/bbw3d/
-│   ├── router.py                   # classify image → lane
-│   ├── vision.py                   # image → design spec (JSON)
-│   ├── cad_client.py               # thin client for cad-agent HTTP API
-│   ├── mesh_client.py              # Highfield generate_3d wrapper
-│   ├── critique.py                 # render vs. source-image compare loop
-│   └── pipeline.py                 # orchestration + retry caps + budget guard
-├── cli.py                          #  bbw3d build ./design.png --mode print
-├── api.py                          # optional FastAPI: POST /build (multipart)
-├── docker-compose.yml              # our service + cad-agent, one `up`
-├── out/                            # gitignored — models never committed
-└── docs/
+│   ├── _http.py                     ✅ stdlib HTTP, errors that say what to do
+│   ├── config.py                    ✅ env-var config
+│   ├── cad_client.py                ✅ the cad-agent client (single source of endpoint truth)
+│   ├── spec.py                      ✅ the design spec + its completeness gate
+│   ├── job.py                       ✅ job folders, rounds, event log
+│   ├── verify.py                    ✅ Milestone 0 endpoint probe
+│   ├── cli.py                       ✅ the whole command surface
+│   └── mesh_client.py               ○  Lane A (deferred — Highfield generate_3d)
+├── tests/                           ✅ 44 tests, no container or network needed
+├── docker-compose.yml               ✅ the cad-agent sidecar
+├── pyproject.toml                   ✅ zero runtime deps
+├── out/                             gitignored — models are artifacts, not source
+└── docs/BBW3D-PLAN.md               this file
 ```
 
-**Stack:** Python 3.11, FastAPI + Uvicorn, httpx, Pillow, Pydantic, Typer for the CLI, pytest. Plus the cad-agent container as a sidecar. That's it — this is a thin orchestrator by design; the heavy lifting is in the container and the APIs.
+**Stack: Python 3.11 standard library. That's the whole list.** No FastAPI, no
+httpx, no Pydantic, no Typer — `urllib`, `argparse`, `dataclasses` and `json`
+cover every job here, and the container owns everything heavy. So `pip install -e .`
+pulls nothing, there is no dependency tree to conflict with core BBW, and the
+tests run on a bare Python. That is what "keep it light" buys us.
 
-**Deliberately excluded to keep it light:** no database (filesystem + JSON manifest per job), no auth system at first (local CLI), no queue (synchronous, one job at a time), no frontend until the CLI proves the pipeline.
+**Deliberately excluded:** no database (a JSON manifest per job folder), no auth,
+no queue (one job at a time), no web frontend, no API server until the CLI proves
+the pipeline is worth wrapping.
+
+### Design decisions worth knowing
+- **The agent is the brain; Python is the hands.** The vision pass and critique
+  pass are done by Claude looking at files, not by our code calling an LLM. So
+  there is no API key, no token budget, and no prompt plumbing to maintain.
+  Unattended mode stays available later as Milestone 6.
+- **Endpoint names live in exactly one place** (`cad_client.py`). They were taken
+  from cad-agent's docs, not its source, so `bbw3d verify` exists to catch the
+  difference and there is a single file to correct.
+- **The client tolerates four response shapes** — raw PNG bytes, base64 anywhere
+  in the JSON, `data:image/png;base64,` URIs, and `/workspace/...` file paths
+  resolved through the bind mount. I don't know which one cad-agent actually
+  uses, so it handles all four and tests all four.
+- **Renders land on disk as PNG files.** That's how the visual loop actually
+  closes in Claude Code: the agent `Read`s the file. Base64 in a response body is
+  useless to it, and echoing blobs into the terminal just burns context.
+- **Every round is on the record** — code per round, renders labelled by round,
+  and a `--because` line saying what the previous render got wrong. When a model
+  comes out wrong you can see which round broke it.
 
 ### Infrastructure reality check
-- The cad-agent image is heavy (build123d/OCP + VTK ≈ 2–3 GB). **It will not run in a serverless function.** It needs a container host: local Docker for dev, then Fly.io / Railway / a small always-on VM (2 vCPU, 4 GB) when we want it remote.
-- **This cloud session has the Docker CLI but no daemon**, so I cannot build or run the container from here. Two options when we implement: (a) you run `docker compose up` on your machine and I drive it, or (b) we `pip install build123d` directly in the session and run the geometry in-process — slower to set up, no VTK renders, but enough to validate the code-generation half. Recommend (a).
-- Lane A needs no infra at all, which is why it's Milestone 1.
+- The cad-agent image is heavy (build123d/OCP + VTK ≈ 2–3 GB) and **cannot run
+  serverless.** Your machine, per your call. Nothing to host, nothing to pay for.
+- **This cloud session has the Docker CLI but no daemon,** so I could not build or
+  run the container from here. What I did instead: wrote a fake cad-agent that
+  replies in all four shapes and drove the entire CLI loop against it
+  (create → render → modify → measure → check → export → show), which is how the
+  two bugs mentioned in §7 were found. The real container is Milestone 0, on you.
 
 ---
 
@@ -160,32 +210,77 @@ A `.claude/agents/3d-designer.md` subagent, defined once, then invoked with an i
 
 ## 5. Milestones
 
-| # | Milestone | What ships | Effort |
-|---|---|---|---|
-| 0 | **Spike / verify** | Stand up cad-agent locally, hit every endpoint, confirm request/response shapes against my §1 table, one hello-world box → render → STL. Correct this plan where reality differs. | ~1 session |
-| 1 | **Lane A end-to-end** | `bbw3d mesh ./art.png` → GLB + turnaround PNG via Highfield. No container needed, so this is the fastest thing that works. | ~1 session |
-| 2 | **Lane B, single shot** | Vision pass → build123d code → create → multiview render → export STL. No critique loop yet. | ~1–2 sessions |
-| 3 | **The critique loop** | Render-vs-image compare, `/model/modify`, iteration cap, printability gate. This is the heart of it. | ~2 sessions |
-| 4 | **Router + CLI polish** | Auto-lane selection, `--mode print\|visual\|both`, per-job manifest with spec + assumptions + iteration log. | ~1 session |
-| 5 | **The agent** | `.claude/agents/3d-designer.md` + the two skills, so "here's a design, build it" just works. | ~1 session |
-| 6 | *(optional)* **Service** | FastAPI `POST /build`, deployed container, signed-URL handoff if core BBW ever needs to call it. | ~2 sessions |
+Reordered for printable-STL-first.
 
-**Suggested order:** 0 → 1 → 2 → 3 → 5 → 4 → 6. Milestone 1 gives you something usable on day one; Milestone 3 is where it gets *good*.
+| # | Milestone | What ships | State |
+|---|---|---|---|
+| 1 | **Toolbelt + agent** | `bbw3d` CLI (stdlib only), cad-agent client that survives any of the four plausible response shapes, job folders with a full paper trail, spec gate, the `3d-designer` agent and `image-to-cad` skill, 44 tests. | **✅ done** |
+| 0 | **Verify against the real container** | `bbw3d verify` probes all 11 endpoints with a known 30×20×10 box and reports what actually came back. Any mismatch gets fixed in `cad_client.py`. **Needs Docker — your machine.** | ⏳ next, blocked on you |
+| 2 | **First real part, end to end** | A genuine design image → spec → build123d → render → STL that slices. Shakes out the build123d patterns that actually work. | after 0 |
+| 3 | **Tighten the critique loop** | Whatever milestone 2 reveals: better render framing, dimension callouts, spec fields that turned out to matter, common failure recipes into the skill. | after 2 |
+| 4 | **Convenience** | `bbw3d build <image>` as a one-shot wrapper, job compare (`round 1 vs round 4`), a small library of reusable parametric patterns. | later |
+| 5 | **Generative GLB lane** | `bbw3d mesh ./art.png` → GLB via Highfield `generate_3d`, Blender cleanup, turnaround render. Deferred — you chose printable first. | deferred |
+| 6 | *(optional)* **Unattended mode** | Pipeline calls the Claude API itself so `bbw3d build x.png` runs with no agent in the loop. Needs an API key and a budget guard. | optional |
+
+Milestone 0 is small — maybe twenty minutes once the container builds — but
+nothing after it is trustworthy until it's done.
 
 ---
 
-## 6. Decisions I need from you
+## 6. What you need to do next
 
-1. **New repo `ZidPix/bbw3d`, or keep building in `SpicyBookclub-`?** (This repo is currently empty — no commits at all, so either is clean. I recommend the separate repo, per your "keep it light.")
-2. **cad-agent as-is, or clean-room wrapper?** As-is is faster and free for internal use; clean-room protects us if BBW3D goes paid/public. Recommend: as-is now, revisit before any launch.
-3. **Primary output target** — printable STL (drives Lane B priority) or pretty GLB for web/AR (drives Lane A)? Both are in the plan; this sets the order.
-4. **Where does the container live** — your machine only, or a small hosted VM?
+1. **Rename the repo** on GitHub: Settings → General → `SpicyBookclub-` → `BBW3D`.
+2. **Build the container** (one time, a few minutes):
+   ```bash
+   git clone https://github.com/Svetlana-DAO-LLC/cad-agent ../cad-agent
+   docker build -t cad-agent:latest ../cad-agent
+   docker compose up -d
+   ```
+3. **Run the two checks**, and send me the output of the second:
+   ```bash
+   pip install -e . && bbw3d health
+   bbw3d verify
+   ```
+   `verify` *is* Milestone 0. Its report tells me exactly which of my assumptions
+   about cad-agent's API were wrong, and they all live in one file.
+4. **Pick a first real design** — ideally a sketch or drawing with **at least one
+   dimension written on it**. That pins the scale, and it makes the difference
+   between a model that fits and a model that merely looks right.
 
 ---
 
 ## 7. What I'm honestly unsure about
 
-- **`src/` unverified.** Endpoint shapes come from their docs. Milestone 0 exists to check them.
+- **cad-agent's `src/` is still unread.** Endpoint paths and payload keys come from
+  its README and SKILL.md. Unauthenticated GitHub API gave me 403 and that repo was
+  outside this session's allowed scope, so `bbw3d verify` is how we find out. The
+  client is written defensively for exactly this reason.
+- **Whether the container returns image bytes, base64, or file paths.** Unknown, so
+  all three are handled and tested. If it turns out to be something stranger,
+  `extract_assets` is the one function to change.
 - **Vision→dimensions is the hard part.** A photo with no dimensions gives proportions, not millimetres. Expect to hand it a scale reference or a stated dimension for print work. Sketches with numbers on them work far better than photos.
 - **Convergence isn't guaranteed.** The critique loop is excellent at "the hole is in the wrong place" and weak at "this whole approach to the geometry is wrong." When the first spec is bad, iterating won't rescue it — the fix is a better spec, which is why the vision pass is a separate, deliberate step.
 - **Gen-AI meshes are not print-ready.** Lane A output will need real repair work (remesh, hollow, thicken) before anyone prints it. Blender via `scene_builder_3d_run_python` can do a lot of that, but don't promise print quality out of Lane A.
+
+### What was actually verified, and what wasn't
+
+Verified here, no container needed:
+- 44 tests pass (`python3 -m unittest discover -s tests`), covering all four
+  response shapes, the endpoint contract, error surfacing, and job/spec bookkeeping.
+- The full CLI loop run against a fake cad-agent that answers in every shape:
+  `health → new → spec → create → render (×4 kinds) → modify → measure → check →
+  export → show`, plus `verify` itself.
+- A deliberately broken code submission returns the container's own error
+  (`HTTP 500: NameError…`) rather than a generic failure.
+- The probe correctly flagged the fake server's wrong dimensions
+  (`expected_30_20_10_found: []`) — which is the exact mismatch detection
+  Milestone 0 relies on.
+
+Two real bugs that testing caught: the CLI was echoing whole base64 PNGs into its
+output (context bloat for the agent, now elided), and render filenames stuttered
+(`r02-multiview-views-iso.png`, now `r02-multiview-iso.png`).
+
+**Not verified:** anything involving the real container. No build123d code in this
+repo has ever been executed — including the probe box in `verify.py`, which is
+only checked for valid Python syntax. Until you run `bbw3d verify`, treat the
+endpoint contract as an educated guess with tests around it.

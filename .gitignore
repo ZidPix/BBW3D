@@ -1,0 +1,35 @@
+# Generated models are artifacts, never source.
+out/
+workspace/
+*.stl
+*.step
+*.stp
+*.3mf
+*.glb
+*.gltf
+*.obj
+*.blend
+*.blend1
+
+# Renders
+*.png
+*.jpg
+*.jpeg
+*.webp
+!docs/**/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

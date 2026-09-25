@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bbw3d"
+version = "0.1.0"
+description = "Turn a flat image into a printable 3D model, via the cad-agent container."
+requires-python = ">=3.11"
+# No runtime dependencies, on purpose. The heavy lifting happens inside the
+# cad-agent container; this package is stdlib-only so it installs anywhere
+# instantly and can never drag a dependency conflict into a host project.
+dependencies = []
+
+[project.scripts]
+bbw3d = "bbw3d.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

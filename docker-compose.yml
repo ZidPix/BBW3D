@@ -1,0 +1,32 @@
+# The CAD container. Runs on your machine only — see docs/BBW3D-PLAN.md.
+#
+# The image is not published, so build it once from a cad-agent clone:
+#
+#   git clone https://github.com/Svetlana-DAO-LLC/cad-agent ../cad-agent
+#   docker build -t cad-agent:latest ../cad-agent
+#   docker compose up -d
+#   bbw3d health
+#
+# Set CAD_AGENT_SRC to point somewhere else, or swap `image:` for `build:` if you
+# would rather compose build it for you.
+
+services:
+  cad-agent:
+    image: cad-agent:latest
+    container_name: bbw3d-cad
+    command: serve
+    ports:
+      - "8123:8123"
+    volumes:
+      # Bind-mounted so that when the container answers with a /workspace path
+      # instead of image bytes, bbw3d can still read the file. Keep this in sync
+      # with BBW3D_WORKSPACE.
+      - ./workspace:/workspace
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://localhost:8123/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
