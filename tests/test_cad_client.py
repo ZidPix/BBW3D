@@ -70,6 +70,32 @@ class TestExtractAssets(unittest.TestCase):
             assets = extract_assets(json_response(payload), search=[ws])
             self.assertEqual(assets, [("path", PNG)])
 
+    def test_renders_mount_path_is_resolved(self):
+        """The image creates /renders as well as /workspace (see its Dockerfile)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "iso.png").write_bytes(PNG)
+            payload = {"views": {"iso": "/renders/iso.png"}}
+            assets = extract_assets(json_response(payload), search=[root])
+            self.assertEqual(assets, [("views.iso", PNG)])
+
+    def test_nested_path_under_a_mount_keeps_its_subfolders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "job1").mkdir()
+            (root / "job1" / "front.png").write_bytes(PNG)
+            payload = {"p": "/workspace/job1/front.png"}
+            self.assertEqual(extract_assets(json_response(payload), search=[root]),
+                             [("p", PNG)])
+
+    def test_windows_style_path_is_normalised(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "top.png").write_bytes(PNG)
+            payload = {"p": "\\renders\\top.png"}
+            self.assertEqual(extract_assets(json_response(payload), search=[root]),
+                             [("p", PNG)])
+
     def test_unresolvable_path_is_ignored(self):
         payload = {"path": "/workspace/renders/missing.png"}
         with tempfile.TemporaryDirectory() as tmp:

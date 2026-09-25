@@ -18,10 +18,12 @@ services:
     ports:
       - "8123:8123"
     volumes:
-      # Bind-mounted so that when the container answers with a /workspace path
-      # instead of image bytes, bbw3d can still read the file. Keep this in sync
-      # with BBW3D_WORKSPACE.
+      # Bind-mounted so that when the container answers with a file path instead
+      # of image bytes, bbw3d can still read the file. The image creates both of
+      # these (see its Dockerfile: mkdir -p /workspace /renders), so mount both.
+      # Keep in sync with BBW3D_WORKSPACE / BBW3D_RENDERS.
       - ./workspace:/workspace
+      - ./renders:/renders
     restart: unless-stopped
     # Informational only — nothing depends on it. Tries python, then curl, since
     # we don't know which the image ships. `bbw3d health` is the real check.

@@ -160,7 +160,9 @@ if ($SkipBuild) {
 # --- start it ---------------------------------------------------------------
 
 Write-Step "Starting the container"
-New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot "workspace") | Out-Null
+foreach ($dir in @("workspace", "renders")) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot $dir) | Out-Null
+}
 & $Docker compose up -d
 if ($LASTEXITCODE -ne 0) { Stop-With "docker compose up failed (see above)." "" }
 Write-Ok "compose up"

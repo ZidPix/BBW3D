@@ -15,6 +15,14 @@ OUT_ROOT = Path(os.environ.get("BBW3D_OUT", "out")).expanduser()
 #: answers with a file path instead of image bytes, we look for it here.
 WORKSPACE = Path(os.environ.get("BBW3D_WORKSPACE", "workspace")).expanduser()
 
+#: The image also creates /renders (see its Dockerfile), so renders may land
+#: there rather than under /workspace. Mounted and searched the same way.
+RENDERS = Path(os.environ.get("BBW3D_RENDERS", "renders")).expanduser()
+
+#: Every host folder a container-side path might resolve through, in order.
+def search_roots() -> list[Path]:
+    return [WORKSPACE, RENDERS, Path.cwd()]
+
 #: How many critique rounds the designer is allowed before it must stop and report.
 MAX_ITERATIONS = int(os.environ.get("BBW3D_MAX_ITERATIONS", "5"))
 

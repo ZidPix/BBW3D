@@ -1,6 +1,7 @@
 # Generated models are artifacts, never source.
 out/
 workspace/
+renders/
 *.stl
 *.step
 *.stp

@@ -65,17 +65,25 @@ def _decode_b64(text: str) -> bytes | None:
     return raw or None
 
 
+#: Container-side directories that are bind-mounted onto host folders. A path
+#: under one of these is retried relative to each host search root with the
+#: mount prefix stripped.
+_MOUNT_POINTS = ("workspace", "renders", "out", "output", "app")
+
+
 def _resolve_path(text: str, search: list[Path]) -> bytes | None:
-    """The container may hand back a /workspace path instead of bytes.
-    That folder is bind-mounted, so try to read it from our side."""
-    candidate = Path(text)
+    """The container may hand back a path instead of bytes. Those folders are
+    bind-mounted, so try to read the file from our side."""
+    candidate = Path(text.replace("\\", "/"))
     names = [candidate]
     if candidate.is_absolute():
-        # /workspace/renders/foo.png -> <WORKSPACE>/renders/foo.png
         parts = candidate.parts
-        if "workspace" in parts:
-            tail = Path(*parts[parts.index("workspace") + 1:])
-            names.append(tail)
+        # /renders/iso.png -> <root>/iso.png ; /workspace/r/iso.png -> <root>/r/iso.png
+        for mount in _MOUNT_POINTS:
+            if mount in parts:
+                tail = parts[parts.index(mount) + 1:]
+                if tail:
+                    names.append(Path(*tail))
         names.append(Path(candidate.name))
     for root in search:
         for name in names:
@@ -96,7 +104,7 @@ def extract_assets(resp: Response, suffixes: tuple[str, ...] = _IMAGE_SUFFIXES,
     the JSON, `data:image/...;base64,` URIs, and file paths pointing into the
     mounted workspace. Returns [(label, bytes), ...] in document order.
     """
-    search = search if search is not None else [config.WORKSPACE, Path.cwd()]
+    search = search if search is not None else config.search_roots()
     ctype = (resp.content_type or "").lower()
 
     if resp.body[:8] == _PNG_MAGIC or ctype.startswith(("image/", "model/", "application/octet-stream")):
@@ -158,7 +166,7 @@ class CadClient:
     base_url: str = config.CAD_URL
     timeout: float = config.HTTP_TIMEOUT
     transport: Transport = request
-    workspace: Path = field(default_factory=lambda: config.WORKSPACE)
+    search_roots: list[Path] = field(default_factory=config.search_roots)
 
     # -- plumbing
     def _url(self, path: str) -> str:
@@ -196,7 +204,7 @@ class CadClient:
         if view:
             payload["view"] = view
         resp = self._post(RENDER_KINDS[kind], payload).raise_for_status()
-        images = extract_assets(resp, _IMAGE_SUFFIXES, [self.workspace, Path.cwd()])
+        images = extract_assets(resp, _IMAGE_SUFFIXES, self.search_roots)
         meta = {} if resp.content_type.startswith("image/") else resp.json()
         if not images:
             raise Bbw3dError(
@@ -214,6 +222,6 @@ class CadClient:
         if fmt not in EXPORT_FORMATS:
             raise Bbw3dError(f"Unknown format {fmt!r}; pick one of {EXPORT_FORMATS}")
         resp = self._post(EP_EXPORT, {KEY_MODEL_READ: name, "format": fmt}).raise_for_status()
-        assets = extract_assets(resp, _MESH_SUFFIXES, [self.workspace, Path.cwd()])
+        assets = extract_assets(resp, _MESH_SUFFIXES, self.search_roots)
         meta = {} if resp.content_type.startswith(("model/", "application/octet-stream")) else resp.json()
         return meta, assets
