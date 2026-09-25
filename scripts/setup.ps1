@@ -138,7 +138,10 @@ if (Test-Path (Join-Path $CadAgentPath ".git")) {
                   "Pass somewhere writable: .\scripts\setup.ps1 -CadAgentPath C:\dev\cad-agent"
     }
     Write-Host "    cloning into $CadAgentPath"
-    git clone --depth 1 https://github.com/Svetlana-DAO-LLC/cad-agent $CadAgentPath
+    # core.autocrlf=false is essential: Git for Windows otherwise rewrites the
+    # shell scripts with CRLF, and a shebang ending in CR makes the kernel look
+    # for an interpreter called "/bin/sh\r" - which fails as "no such file".
+    git clone --depth 1 --config core.autocrlf=false --config core.eol=lf https://github.com/Svetlana-DAO-LLC/cad-agent $CadAgentPath
     if ($LASTEXITCODE -ne 0) {
         Stop-With "git clone failed (see above)." `
                   "If it was a permissions error, pick a writable folder: -CadAgentPath C:\dev\cad-agent"
@@ -146,9 +149,30 @@ if (Test-Path (Join-Path $CadAgentPath ".git")) {
     Write-Ok "cloned"
 }
 
+# Repair a clone made before the config above (or by hand). A single CR on the
+# shebang line is enough to make the container restart-loop with
+# "exec ./entrypoint.sh: no such file or directory".
+git -C $CadAgentPath config core.autocrlf false
+$repaired = @()
+$shellFiles = Get-ChildItem -Path $CadAgentPath -Recurse -File -Include "*.sh" -ErrorAction SilentlyContinue
+foreach ($file in $shellFiles) {
+    $text = [System.IO.File]::ReadAllText($file.FullName)
+    if ($text.Contains("`r`n")) {
+        $text = $text.Replace("`r`n", "`n")
+        [System.IO.File]::WriteAllText($file.FullName, $text, (New-Object System.Text.UTF8Encoding($false)))
+        $repaired += $file.Name
+    }
+}
+if ($repaired.Count -gt 0) {
+    Write-Warn2 "Converted CRLF to LF in: $($repaired -join ', ') (forcing a rebuild)"
+    $script:ForceRebuild = $true
+} else {
+    Write-Ok "shell scripts have Unix line endings"
+}
+
 # --- build the image --------------------------------------------------------
 
-if ($SkipBuild) {
+if ($SkipBuild -and -not $script:ForceRebuild) {
     Write-Step "Skipping docker build (-SkipBuild)"
 } else {
     Write-Step "Building cad-agent:latest (first run takes several minutes)"
