@@ -1,0 +1,184 @@
+<#
+.SYNOPSIS
+    One-shot BBW3D setup for Windows: clone cad-agent, build it, start it,
+    install the toolbelt, and run the endpoint verification.
+
+.DESCRIPTION
+    Run this from anywhere inside the BBW3D repo:
+
+        .\scripts\setup.ps1
+
+    Everything is idempotent — safe to re-run. Nothing is installed globally
+    except the bbw3d package itself (editable, from this folder).
+
+.PARAMETER CadAgentPath
+    Where to clone/find the cad-agent source. Defaults to a sibling folder
+    next to this repo.
+
+.PARAMETER SkipBuild
+    Skip the docker build (use when the image already exists and you only
+    want to restart and re-verify).
+
+.PARAMETER Python
+    Python launcher to use. Defaults to 'py' if present, otherwise 'python'.
+#>
+
+#Requires -Version 5.1
+[CmdletBinding()]
+param(
+    [string] $CadAgentPath = "",
+    [switch] $SkipBuild,
+    [string] $Python = ""
+)
+
+$ErrorActionPreference = "Stop"
+
+function Write-Step  ([string] $Text) { Write-Host "`n==> $Text" -ForegroundColor Cyan }
+function Write-Ok    ([string] $Text) { Write-Host "    OK  $Text" -ForegroundColor Green }
+function Write-Warn2 ([string] $Text) { Write-Host "    !   $Text" -ForegroundColor Yellow }
+
+function Stop-With ([string] $Text, [string] $Fix) {
+    Write-Host "`nSTOPPED: $Text" -ForegroundColor Red
+    if ($Fix) { Write-Host "Fix:     $Fix" -ForegroundColor Yellow }
+    exit 1
+}
+
+function Test-Command ([string] $Name) {
+    $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+# --- where are we -----------------------------------------------------------
+
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $RepoRoot
+Write-Step "BBW3D setup"
+Write-Host "    repo: $RepoRoot"
+
+if (-not (Test-Path (Join-Path $RepoRoot "pyproject.toml"))) {
+    Stop-With "This does not look like the BBW3D repo (no pyproject.toml)." `
+              "cd into your BBW3D clone and run .\scripts\setup.ps1 again."
+}
+
+# --- prerequisites ----------------------------------------------------------
+
+Write-Step "Checking prerequisites"
+
+if (-not (Test-Command "git")) {
+    Stop-With "git not found." "Install Git for Windows: https://git-scm.com/download/win"
+}
+Write-Ok "git"
+
+if (-not (Test-Command "docker")) {
+    Stop-With "docker not found." "Install Docker Desktop: https://docs.docker.com/desktop/install/windows-install/"
+}
+
+docker info *> $null
+if ($LASTEXITCODE -ne 0) {
+    Stop-With "Docker is installed but not running." `
+              "Start Docker Desktop, wait for the whale icon to settle, then re-run this script."
+}
+Write-Ok "docker (daemon responding)"
+
+if (-not $Python) {
+    if (Test-Command "py") { $Python = "py" }
+    elseif (Test-Command "python") { $Python = "python" }
+    else { Stop-With "No Python found." "Install Python 3.11+: https://www.python.org/downloads/windows/" }
+}
+$pyVersion = (& $Python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>$null)
+if ($LASTEXITCODE -ne 0) { Stop-With "'$Python' did not run." "Pass a working one: .\scripts\setup.ps1 -Python python3" }
+Write-Ok "python $pyVersion ($Python)"
+
+$verOk = & $Python -c "import sys; print(1 if sys.version_info >= (3, 11) else 0)"
+if ($verOk.Trim() -ne "1") {
+    Stop-With "Python 3.11+ required, found $pyVersion." "Install a newer Python, then re-run."
+}
+
+# --- cad-agent source -------------------------------------------------------
+
+if (-not $CadAgentPath) {
+    $CadAgentPath = Join-Path (Split-Path -Parent $RepoRoot) "cad-agent"
+}
+
+Write-Step "cad-agent source"
+if (Test-Path (Join-Path $CadAgentPath ".git")) {
+    Write-Ok "already cloned at $CadAgentPath"
+} else {
+    $parent = Split-Path -Parent $CadAgentPath
+    if (-not (Test-Path $parent)) {
+        Stop-With "Cannot clone into '$parent' (it does not exist)." `
+                  "Pass somewhere writable: .\scripts\setup.ps1 -CadAgentPath C:\dev\cad-agent"
+    }
+    Write-Host "    cloning into $CadAgentPath"
+    git clone --depth 1 https://github.com/Svetlana-DAO-LLC/cad-agent $CadAgentPath
+    if ($LASTEXITCODE -ne 0) {
+        Stop-With "git clone failed (see above)." `
+                  "If it was a permissions error, pick a writable folder: -CadAgentPath C:\dev\cad-agent"
+    }
+    Write-Ok "cloned"
+}
+
+# --- build the image --------------------------------------------------------
+
+if ($SkipBuild) {
+    Write-Step "Skipping docker build (-SkipBuild)"
+} else {
+    Write-Step "Building cad-agent:latest (first run takes several minutes)"
+    docker build -t cad-agent:latest $CadAgentPath
+    if ($LASTEXITCODE -ne 0) { Stop-With "docker build failed (see above)." "" }
+    Write-Ok "image built"
+}
+
+# --- start it ---------------------------------------------------------------
+
+Write-Step "Starting the container"
+New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot "workspace") | Out-Null
+docker compose up -d
+if ($LASTEXITCODE -ne 0) { Stop-With "docker compose up failed (see above)." "" }
+Write-Ok "compose up"
+
+# --- install the toolbelt ---------------------------------------------------
+
+Write-Step "Installing the bbw3d toolbelt (editable, no dependencies)"
+& $Python -m pip install -e . --quiet
+if ($LASTEXITCODE -ne 0) { Stop-With "pip install failed (see above)." "" }
+Write-Ok "bbw3d installed"
+
+# --- wait for health --------------------------------------------------------
+
+Write-Step "Waiting for the container to answer /health"
+$healthy = $false
+for ($i = 1; $i -le 40; $i++) {
+    try {
+        $resp = Invoke-WebRequest -Uri "http://localhost:8123/health" -TimeoutSec 3 -UseBasicParsing
+        if ($resp.StatusCode -eq 200) { $healthy = $true; break }
+    } catch {
+        Start-Sleep -Seconds 3
+    }
+}
+if (-not $healthy) {
+    Write-Warn2 "No answer on http://localhost:8123/health after ~2 minutes."
+    Write-Warn2 "Check the container's own logs:   docker compose logs --tail 50"
+    Stop-With "Container never came up." "Send me the output of: docker compose logs --tail 50"
+}
+Write-Ok "container is healthy"
+
+# --- verify -----------------------------------------------------------------
+
+Write-Step "Verifying the API contract (this is the bit to send back)"
+$outDir = Join-Path $RepoRoot "out"
+New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+$report = Join-Path $outDir "verify-report.json"
+
+& $Python -m bbw3d.cli verify | Tee-Object -FilePath $report
+$verifyExit = $LASTEXITCODE
+
+Write-Host ""
+if ($verifyExit -eq 0) {
+    Write-Host "All documented endpoints answered." -ForegroundColor Green
+} else {
+    Write-Host "Some endpoints did not behave as documented — that is exactly what this check is for." -ForegroundColor Yellow
+}
+Write-Host "Report saved to: $report" -ForegroundColor Cyan
+Write-Host "Send me that file (or paste it) and I'll correct the client." -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Then you're ready:  bbw3d new .\your-design.png" -ForegroundColor White

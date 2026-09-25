@@ -36,21 +36,50 @@ BBW. Stdlib-only Python, so the whole thing installs in seconds.
 The container never makes decisions and the agent never touches a mesh. This CLI
 just carries code in and pictures out.
 
-## Setup (local machine, needs Docker)
+## Setup
+
+Needs **Docker Desktop running** and **Python 3.11+**. The CAD image isn't
+published anywhere, so it gets built once from a cad-agent clone.
+
+### Windows (PowerShell)
+
+Clone somewhere you own — **not** directly in `C:\Users\<you>`, because `..`
+there is `C:\Users`, which Windows won't let you write to:
+
+```powershell
+mkdir $HOME\dev -Force
+cd $HOME\dev
+git clone https://github.com/ZidPix/SpicyBookclub- BBW3D
+cd BBW3D
+.\scripts\setup.ps1
+```
+
+That one script clones cad-agent as a sibling, builds the image, starts the
+container, installs this toolbelt, waits for health, and writes the verification
+report to `out\verify-report.json`. Re-running it is safe.
+
+If PowerShell refuses to run the script, it's the execution policy:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+```
+
+Useful switches: `-CadAgentPath C:\dev\cad-agent` to put the clone elsewhere,
+`-SkipBuild` to restart and re-verify without rebuilding the image.
+
+> Note for PowerShell 5.1 (the blue-icon "Windows PowerShell"): `&&` between
+> commands is a syntax error there — it only works in PowerShell 7+. Use `;`, or
+> put each command on its own line.
+
+### macOS / Linux
 
 ```bash
-# 1. the CAD container — built from the cad-agent repo, not published
+git clone https://github.com/ZidPix/SpicyBookclub- BBW3D && cd BBW3D
 git clone https://github.com/Svetlana-DAO-LLC/cad-agent ../cad-agent
 docker build -t cad-agent:latest ../cad-agent
 docker compose up -d
-
-# 2. this toolbelt
 pip install -e .
-
-# 3. confirm the two can talk
 bbw3d health
-
-# 4. confirm the container behaves the way this client expects
 bbw3d verify
 ```
 
@@ -83,6 +112,13 @@ bbw3d show                            # the paper trail
 ```
 
 `--job` defaults to the most recent job under `out/`.
+
+If your shell can't find `bbw3d` after install (Python's `Scripts` folder isn't on
+PATH — common on Windows), every command works the long way too:
+
+```powershell
+py -m bbw3d.cli render --kind multiview
+```
 
 ## Configuration
 
