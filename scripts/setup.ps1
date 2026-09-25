@@ -170,6 +170,29 @@ if ($repaired.Count -gt 0) {
     Write-Ok "shell scripts have Unix line endings"
 }
 
+# cad-agent's published .py files contain backslash-escaped quotes, which is a
+# SyntaxError - the server crash-loops before it can listen. Repair only the
+# files that do not compile, and only where the fix makes them compile.
+Write-Step "Checking cad-agent's Python sources compile"
+$repairOut = & $Python (Join-Path $RepoRoot "scripts\repair_cad_agent.py") $CadAgentPath 2>&1 | Out-String
+$repairExit = $LASTEXITCODE
+$repairLog = Join-Path (Join-Path $RepoRoot "out") "cad-agent-repair.json"
+New-Item -ItemType Directory -Force -Path (Split-Path $repairLog) | Out-Null
+$repairOut | Set-Content -Path $repairLog
+
+if ($repairOut -match '"repaired": \[\s*\]') {
+    Write-Ok "all sources compile"
+} else {
+    Write-Warn2 "Repaired escaped-quote artifacts in cad-agent's sources (forcing a rebuild)"
+    Write-Host $repairOut
+    $script:ForceRebuild = $true
+}
+if ($repairExit -ne 0) {
+    Write-Host $repairOut
+    Stop-With "Some cad-agent sources still do not compile." `
+              "Full report: $repairLog - send it to me."
+}
+
 # --- build the image --------------------------------------------------------
 
 if ($SkipBuild -and -not $script:ForceRebuild) {
