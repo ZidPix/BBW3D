@@ -29,6 +29,10 @@ dist/
 .pytest_cache/
 .ruff_cache/
 
+# MCP client config — Docker writes machine-specific absolute paths into it.
+# See docs/DOCKER-MCP.md.
+.mcp.json
+
 # Editors / OS
 .DS_Store
 .idea/
