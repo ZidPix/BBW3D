@@ -145,4 +145,57 @@ container too: every render now returns **both** `path` and `base64`, with
 identical byte counts, so the file read off the bind mount is the same image
 the container encoded.
 
-Next: a first real design image through the full loop.
+**The full loop has been run**, image → printable STL, and it needed no code
+changes: `health → new → read the image → spec → create → render → critique →
+check → export → show`. The part was a bracket plate (80x40x6, R8 corners,
+2 x dia 6 THRU); it converged in **one round** and the job is the worked
+example to copy. Caveat on that run: the drawing was generated for the test,
+so the same session authored the input and modelled from it. The first
+genuinely unseen image is still ahead.
+
+### Proving a model matches, without eyeballing it
+
+Volume plus topology pins down almost everything, and misses one thing:
+
+- **Volume** catches outline, corner radius, thickness, bore diameter and bore
+  count in one number — compute it analytically and compare. The bracket
+  agreed to 0.07 mm3 out of 18531.
+- **`euler_number` is a free through-hole count**: chi = 2 - 2 x genus, so -2
+  means exactly two through holes. A blind hole would not change it.
+- **Centre of mass** at the origin proves a feature pair is symmetric.
+- **None of these constrain feature *position*** — the volume is identical
+  wherever the bores sit. Measure position off the **exported STL** (in the
+  container, per rule 8): cluster the bore wall vertices and fit a centre. That
+  is what confirmed 15.000 mm inset and 50.000 mm pitch.
+
+### Reading a multiview render
+
+The auto-dimensions on the orthographic views are generated from the
+silhouette, not from your features. On the bracket the top view is annotated
+`64.0` and `24.0`, which are the **fillet tangent spans** (80 - 2x8, 40 - 2x8),
+not the hole pitch. Do not read them as feature dimensions and "correct" a
+model that is already right.
+
+### build123d that the container accepted
+
+Verbatim from the round that worked, in the `builder-part` dialect. No
+imports, constants at the top so a critique round is a one-line change:
+
+```python
+WIDTH = 80.0
+CORNER_R = 8.0
+HOLE_X = 25.0
+
+with BuildPart() as part:
+    Box(WIDTH, DEPTH, THICKNESS)          # centred on the origin by default
+    fillet(part.edges().filter_by(Axis.Z), radius=CORNER_R)
+    with Locations((-HOLE_X, 0.0, 0.0), (HOLE_X, 0.0, 0.0)):
+        Hole(radius=HOLE_D / 2)           # no depth given -> straight THRU
+
+result = part.part
+```
+
+Watch the blacklist while naming things: it is plain substring matching, so a
+variable ending in `pos` before a dot trips the `os.` entry.
+
+Next: a first design image the session has not seen before.
