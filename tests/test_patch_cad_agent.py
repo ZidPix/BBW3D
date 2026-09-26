@@ -219,6 +219,75 @@ class TestApplyPatches(unittest.TestCase):
         self.assertIn("aim-3d-camera", [p["name"] for p in second["already"]])
         self.assertEqual(renderer.read_text(), patched, "second run changed the file")
 
+    def test_viewer_header_repair_restores_the_grid_container(self):
+        """The toolbar sat on top of the drop label because .main never existed.
+
+        An unterminated id="status swallowed the header's </div> and the
+        <div class="main"> opening tag, so the CSS grid had no container.
+        """
+        from patch_cad_agent import HEADER_SCRAMBLED
+
+        viewer = self.root / "src" / "static" / "viewer.html"
+        viewer.parent.mkdir(parents=True)
+        viewer.write_text(
+            "<body>\n    <div class=\"header\">\n        <h1>CAD Agent</h1>\n"
+            + HEADER_SCRAMBLED
+            + "\n        <div class=\"sidebar\"></div>\n    </div>\n</body>\n",
+            encoding="utf-8",
+        )
+
+        report = apply_patches(self.root)
+        self.assertIn("repair-viewer-header", [p["name"] for p in report["applied"]])
+
+        patched = viewer.read_text()
+        self.assertIn('id="status">Connecting...</span>', patched,
+                      "the status span must be closed properly")
+        self.assertIn('<div class="main">', patched,
+                      "the grid container must exist as a real opening tag")
+        self.assertNotIn("</span<", patched, "the mangled end tag must be gone")
+
+        # HTMLParser is the cheapest proof the browser now sees a .main element.
+        from html.parser import HTMLParser
+
+        class Collect(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.classes = []
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if attrs.get("class"):
+                    self.classes.append(attrs["class"])
+
+        seen = Collect()
+        seen.feed(patched)
+        self.assertIn("main", seen.classes,
+                      "a real <div class='main'> must be parsed out of the markup")
+
+        second = apply_patches(self.root)
+        self.assertIn("repair-viewer-header", [p["name"] for p in second["already"]])
+
+    def test_the_broken_viewer_markup_really_loses_the_grid(self):
+        """Proof the diagnosis is right, not just the fix - the ORIGINAL markup
+        parses with no .main element at all."""
+        from html.parser import HTMLParser
+        from patch_cad_agent import HEADER_SCRAMBLED
+
+        class Collect(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.classes = []
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if attrs.get("class"):
+                    self.classes.append(attrs["class"])
+
+        seen = Collect()
+        seen.feed("<body>\n" + HEADER_SCRAMBLED + "\n</body>")
+        self.assertNotIn("main", seen.classes,
+                         "the defect is that .main is never created")
+
     def test_camera_patch_handles_the_degenerate_top_view(self):
         """For top/bottom the eye vector is parallel to a naive 'up', which
         would make the cross product zero and the camera basis NaN."""

@@ -138,6 +138,49 @@ CAMERA_AIMED = '''    def _render_3d_trimesh(self, shape: Any, view: ViewAngle, 
 
         png = scene.save_image(resolution=(self.config.width, self.config.height))'''
 
+# ---------------------------------------------------------------------------
+# Patch 4: the viewer's header markup is scrambled, so there is no layout
+#
+# viewer.html ships with an unterminated attribute:
+#
+#     <span class="status" id="status>
+#     </div>
+#
+#     ">Connecting...</span<div class="main">
+#
+# id="status has no closing quote, so the parser swallows the ">", the </div>
+# that closes the header and the blank line, up to the next quote. What is
+# left, </span<div class="main">, is a mangled END tag - and it eats the
+# <div class="main"> OPENING tag with it.
+#
+# .main is the app's grid (grid-template-columns: 280px 1fr 320px). Without
+# that container the three panels stack in one narrow column, the viewer pane
+# collapses, and the absolutely positioned .controls land on top of the
+# centred .loading label - which is why the toolbar buttons sit over the
+# "Drop STL or create model" text and nothing there can be clicked.
+#
+# Same family as the escaped-quote SyntaxErrors repair_cad_agent.py fixes in
+# their .py files: published source that was never parsed.
+# ---------------------------------------------------------------------------
+
+# Built line by line: the line between </div> and the stray quote is four
+# spaces, not empty, and a triple-quoted literal would silently lose that.
+HEADER_SCRAMBLED = "\n".join((
+    '        <span class="status" id="status>',
+    '    </div>',
+    '    ',
+    '    ">Connecting...</span<div class="main">',
+))
+
+HEADER_FIXED = "\n".join((
+    '        <span class="status" id="status">Connecting...</span>',
+    '    </div>',
+    '    ',
+    '    <!-- Repaired by BBW3D: id="status was unterminated, which swallowed',
+    '         the header\'s </div> and the <div class="main"> opening tag. -->',
+    '    <div class="main">',
+))
+
 #: name -> (file, broken text, fixed text, marker proving it is applied)
 PATCHES: list[dict] = [
     {
@@ -158,6 +201,17 @@ PATCHES: list[dict] = [
         "why": "the finally block overwrote result['output'], discarding the "
                "'No 3D shape found - assign to result' warning that explains why "
                "a successful-looking create stored nothing",
+    },
+    {
+        "name": "repair-viewer-header",
+        "file": "src/static/viewer.html",
+        "broken": HEADER_SCRAMBLED,
+        "fixed": HEADER_FIXED,
+        "marker": "Repaired by BBW3D",
+        "why": "an unterminated id=\"status attribute swallowed the header's "
+               "</div> AND the <div class=\"main\"> that opens the CSS grid, so "
+               "the three panels stacked in one column and the viewer's toolbar "
+               "rendered on top of the drop/status label",
     },
     {
         "name": "aim-3d-camera",
