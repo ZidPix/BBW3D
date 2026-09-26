@@ -22,7 +22,8 @@ from pathlib import Path
 
 #: Functions that plausibly run submitted code.
 RUNNER_NAMES = ("execute_code", "execute", "run_code", "_execute", "create_model",
-                "modify_model", "eval_code", "_run")
+                "modify_model", "eval_code", "_run", "_extract_shape",
+                "_build_namespace", "_render", "render", "export")
 
 #: Module-level constants that plausibly define the sandbox policy.
 POLICY_HINTS = ("FORBIDDEN", "BLOCKED", "BANNED", "DENY", "ALLOWED", "SAFE",

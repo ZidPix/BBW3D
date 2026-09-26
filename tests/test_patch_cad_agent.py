@@ -149,9 +149,29 @@ class TestApplyPatches(unittest.TestCase):
     def test_reports_not_needed_when_upstream_differs(self):
         self.engine.write_text("class CADEngine:\n    pass\n", encoding="utf-8")
         report = apply_patches(self.root)
-        self.assertEqual([p["name"] for p in report["not_needed"]],
-                         ["build123d-namespace"])
-        self.assertTrue(report["ok"])
+        names = [p["name"] for p in report["not_needed"]]
+        self.assertIn("build123d-namespace", names)
+        self.assertEqual(report["applied"], [])
+        self.assertTrue(report["ok"], "a changed upstream is not an error")
+
+    def test_patch_two_preserves_the_no_shape_warning(self):
+        from patch_cad_agent import OUTPUT_CLOBBERED
+        engine = self.engine.read_text() + """
+    def execute_code(self, code, model_name="default"):
+        result = {"success": False, "output": "", "geometry": None}
+        try:
+            exec(code, {})
+            result["output"] += "\\n[Warning: No 3D shape found in result.]"
+""" + OUTPUT_CLOBBERED + """
+        return result
+"""
+        self.engine.write_text(engine, encoding="utf-8")
+        report = apply_patches(self.root)
+        self.assertIn("preserve-no-shape-warning",
+                      [p["name"] for p in report["applied"]])
+        patched = self.engine.read_text()
+        ast.parse(patched)
+        self.assertIn('sys.stdout.getvalue() + result.get("output", "")', patched)
 
     def test_missing_file_is_reported_not_crashed_on(self):
         self.engine.unlink()

@@ -57,6 +57,28 @@ NAMESPACE_FIXED = '''        # Populate build123d names WITHOUT granting the san
             if hasattr(_bbw3d_b3d, _bbw3d_name):
                 namespace[_bbw3d_name] = getattr(_bbw3d_b3d, _bbw3d_name)'''
 
+# ---------------------------------------------------------------------------
+# Patch 2: the warning that explains a silent failure is thrown away
+#
+# When execute_code cannot find a shape it returns success with geometry=null
+# and appends an explanation to result["output"]:
+#
+#     [Warning: No 3D shape found in result. Assign to 'result' variable.]
+#
+# Its own finally block then does result["output"] = sys.stdout.getvalue(),
+# overwriting that warning. So a create that stores nothing reports success
+# with an empty output, and the cause only surfaces much later as "No model
+# found" on every other endpoint. Append rather than overwrite.
+# ---------------------------------------------------------------------------
+
+OUTPUT_CLOBBERED = '''        finally:
+            result["output"] = sys.stdout.getvalue()'''
+
+OUTPUT_PRESERVED = '''        finally:
+            # Patched by BBW3D: was an assignment, which discarded the
+            # "No 3D shape found" warning appended above.
+            result["output"] = sys.stdout.getvalue() + result.get("output", "")'''
+
 #: name -> (file, broken text, fixed text, marker proving it is applied)
 PATCHES: list[dict] = [
     {
@@ -67,6 +89,16 @@ PATCHES: list[dict] = [
         "marker": "_bbw3d_b3d",
         "why": "_build_namespace raised 'build123d not available: __import__ not "
                "found' on every request, so no model could ever be created",
+    },
+    {
+        "name": "preserve-no-shape-warning",
+        "file": "src/cad_engine.py",
+        "broken": OUTPUT_CLOBBERED,
+        "fixed": OUTPUT_PRESERVED,
+        "marker": "Patched by BBW3D: was an assignment",
+        "why": "the finally block overwrote result['output'], discarding the "
+               "'No 3D shape found - assign to result' warning that explains why "
+               "a successful-looking create stored nothing",
     },
 ]
 

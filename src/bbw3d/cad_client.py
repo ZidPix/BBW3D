@@ -190,6 +190,25 @@ def says_missing_model(resp: Response) -> bool:
     return any(phrase in error for phrase in _MISSING_MODEL)
 
 
+def raise_if_no_geometry(data: dict, what: str) -> dict:
+    """Catch the container's silent failure.
+
+    execute_code returns success=true with geometry=null when it cannot find a
+    shape in the namespace - the model is simply not stored. It appends a
+    warning to `output` explaining this, but its own `finally` block then
+    overwrites `output` with captured stdout, so the warning never arrives.
+    The result is a create that reports success and leaves nothing behind,
+    which only surfaces later as "No model found" on every other call.
+    """
+    if data.get("success") and data.get("geometry") is None:
+        raise Bbw3dError(
+            f"{what} was accepted but stored NO model: the container could not "
+            f"find a shape in the namespace. End the code with an explicit "
+            f"assignment to {RESULT_VARIABLE!r}, e.g. `result = part.part` after "
+            f"a `with BuildPart() as part:` block.")
+    return data
+
+
 def raise_if_failed(data: dict, what: str) -> dict:
     """The container answers HTTP 200 with success=false on refusal.
 
@@ -291,12 +310,14 @@ class CadClient:
     def create(self, name: str, code: str) -> dict:
         self.check_code(code)
         resp = self._post_for_model(EP_CREATE, name, {"code": code}).raise_for_status()
-        return raise_if_failed(resp.json(), f"create {name!r}")
+        data = raise_if_failed(resp.json(), f"create {name!r}")
+        return raise_if_no_geometry(data, f"create {name!r}")
 
     def modify(self, name: str, code: str) -> dict:
         self.check_code(code)
         resp = self._post_for_model(EP_MODIFY, name, {"code": code}).raise_for_status()
-        return raise_if_failed(resp.json(), f"modify {name!r}")
+        data = raise_if_failed(resp.json(), f"modify {name!r}")
+        return raise_if_no_geometry(data, f"modify {name!r}")
 
     # -- looking at it
     def render(self, name: str, kind: str = "multiview", view: str | None = None) -> RenderResult:

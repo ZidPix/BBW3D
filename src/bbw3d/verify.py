@@ -27,12 +27,13 @@ PROBE_NAME = "bbw3d_probe_box"
 
 #: A dull 30x20x10 box, so measurements can be checked against the truth.
 #: No import line: the container refuses "import " outright.
+#: Ordered most-likely-first. Every one assigns to `result`: without it the
+#: container reports success and silently stores nothing.
 PROBE_DIALECTS: list[tuple[str, str]] = [
-    ("builder", "with BuildPart() as part:\n    Box(30, 20, 10)\n"),
-    ("builder-result", "with BuildPart() as part:\n    Box(30, 20, 10)\nresult = part\n"),
-    ("algebra-part", "part = Box(30, 20, 10)\n"),
+    ("builder-part", "with BuildPart() as part:\n    Box(30, 20, 10)\nresult = part.part\n"),
     ("algebra-result", "result = Box(30, 20, 10)\n"),
-    ("bare", "Box(30, 20, 10)\n"),
+    ("builder-object", "with BuildPart() as part:\n    Box(30, 20, 10)\nresult = part\n"),
+    ("builder-no-result", "with BuildPart() as part:\n    Box(30, 20, 10)\n"),
 ]
 
 EXPECTED = {"x": 30.0, "y": 20.0, "z": 10.0}
