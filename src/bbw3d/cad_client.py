@@ -14,7 +14,7 @@ import binascii
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import config
 from ._http import Bbw3dError, Response, request
@@ -92,21 +92,45 @@ _MOUNT_POINTS = ("workspace", "renders", "out", "output", "app")
 
 def _resolve_path(text: str, search: list[Path]) -> bytes | None:
     """The container may hand back a path instead of bytes. Those folders are
-    bind-mounted, so try to read the file from our side."""
-    candidate = Path(text.replace("\\", "/"))
-    names = [candidate]
-    if candidate.is_absolute():
-        parts = candidate.parts
+    bind-mounted, so try to read the file from our side.
+
+    The path comes from the container, so it is POSIX even when we are running
+    on Windows. It must be parsed with PurePosixPath: a plain Path here is a
+    WindowsPath on a Windows host, and WindowsPath("/renders/iso.png") is NOT
+    absolute (Windows wants a drive letter), so the mount prefix was never
+    stripped - and `root / candidate` then discarded the root and probed
+    C:\\renders\\iso.png. Every path-based asset came back empty on Windows.
+    """
+    container = PurePosixPath(text.replace("\\", "/"))
+
+    # Host semantics on purpose: on Linux the mount may be visible at the very
+    # same path, so it is worth reading directly. On Windows this is False for
+    # "/renders/...", which is what we want - probing it would resolve against
+    # the current drive and could read an unrelated file.
+    host_candidate = Path(text.replace("\\", "/"))
+    if host_candidate.is_absolute():
+        try:
+            if host_candidate.is_file():
+                return host_candidate.read_bytes()
+        except OSError:
+            pass
+
+    names: list[PurePosixPath] = []
+    if container.is_absolute():
+        parts = container.parts
         # /renders/iso.png -> <root>/iso.png ; /workspace/r/iso.png -> <root>/r/iso.png
         for mount in _MOUNT_POINTS:
             if mount in parts:
                 tail = parts[parts.index(mount) + 1:]
                 if tail:
-                    names.append(Path(*tail))
-        names.append(Path(candidate.name))
+                    names.append(PurePosixPath(*tail))
+        names.append(PurePosixPath(container.name))
+    else:
+        names.append(container)
+
     for root in search:
         for name in names:
-            probe = name if name.is_absolute() else root / name
+            probe = root / str(name)
             try:
                 if probe.is_file():
                     return probe.read_bytes()
