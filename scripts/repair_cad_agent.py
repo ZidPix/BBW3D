@@ -77,13 +77,16 @@ def repair_tree(root: Path, dry_run: bool = False) -> dict:
         "dry_run": dry_run,
     }
 
+    # Reported paths are always POSIX-relative ("src/cad_engine.py"), never
+    # str(PurePath) - that yields backslashes on Windows, which would not match
+    # the "file" keys patch_cad_agent.py reports for the very same files.
     for path in sorted(root.rglob("*.py")):
         if any(part in SKIP_DIRS for part in path.parts):
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
-            report["still_broken"].append({"file": str(path.relative_to(root)),
+            report["still_broken"].append({"file": path.relative_to(root).as_posix(),
                                            "error": f"unreadable: {exc}"})
             continue
 
@@ -96,14 +99,14 @@ def repair_tree(root: Path, dry_run: bool = False) -> dict:
         fixed = repair_source(text, str(path))
         if fixed is None:
             report["still_broken"].append(
-                {"file": str(path.relative_to(root)), "error": error})
+                {"file": path.relative_to(root).as_posix(), "error": error})
             continue
 
         new_text, description, replacements = fixed
         if not dry_run:
             path.write_text(new_text, encoding="utf-8", newline="\n")
         report["repaired"].append({
-            "file": str(path.relative_to(root)),
+            "file": path.relative_to(root).as_posix(),
             "fix": description,
             "replacements": replacements,
             "was": error,
