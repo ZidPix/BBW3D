@@ -79,6 +79,65 @@ OUTPUT_PRESERVED = '''        finally:
             # "No 3D shape found" warning appended above.
             result["output"] = sys.stdout.getvalue() + result.get("output", "")'''
 
+# ---------------------------------------------------------------------------
+# Patch 3: every 3D render was an extreme close-up of one face
+#
+# render_3d tries VTK, then pyrender, then _render_3d_trimesh. Neither vtk nor
+# pyrender is in requirements.txt, so the trimesh fallback is the only path
+# that ever runs - and it ignores its own `view` argument, calling
+# mesh.scene().save_image() with trimesh's default camera.
+#
+# That camera looks straight down -Y and sits so close that the near face
+# overflows the frustum: for the 30x20x10 probe box the front face covers the
+# full width and 446 of 480 rows, so the PNG is one flat grey rectangle. It
+# looks exactly like a failed render, but the geometry was drawn correctly -
+# the depth buffer reads 0.9996 where the "blank" pixels are.
+#
+# Aim the camera along the requested VIEW_DIRECTIONS vector and let trimesh's
+# camera.look_at fit the bounding corners to the field of view, which leaves a
+# margin at every view angle.
+# ---------------------------------------------------------------------------
+
+CAMERA_UNSET = '''    def _render_3d_trimesh(self, shape: Any, view: ViewAngle, output_path: Path) -> Path:
+        mesh = self._shape_to_trimesh(shape)
+        png = mesh.scene().save_image(resolution=(self.config.width, self.config.height))'''
+
+CAMERA_AIMED = '''    def _render_3d_trimesh(self, shape: Any, view: ViewAngle, output_path: Path) -> Path:
+        # Patched by BBW3D: aim the camera at the requested view and fit the
+        # model to the frame. The original ignored `view` and used trimesh's
+        # default camera, which sits so close that the near face overflows the
+        # frustum - every render came back as one flat rectangle that looked
+        # like a failure but was really an extreme close-up of a single face.
+        import trimesh as _bbw3d_trimesh
+
+        mesh = self._shape_to_trimesh(shape)
+        scene = mesh.scene()
+
+        direction = np.asarray(
+            VIEW_DIRECTIONS.get(view, VIEW_DIRECTIONS["iso"]), dtype=float)
+        eye = direction / np.linalg.norm(direction)
+        # Straight up is degenerate for top/bottom, where eye is parallel to it.
+        up = np.array([0.0, -1.0, 0.0]) if view in ("top", "bottom") else np.array([0.0, 0.0, 1.0])
+        if abs(float(np.dot(up, eye))) > 0.999:
+            up = np.array([0.0, 1.0, 0.0])
+        right = np.cross(up, eye)
+        right = right / np.linalg.norm(right)
+        rotation = np.eye(4)
+        rotation[:3, 0] = right
+        rotation[:3, 1] = np.cross(eye, right)
+        rotation[:3, 2] = eye
+
+        # look_at fits these corners to the camera's field of view, but exactly
+        # - the solid ends up flush against the frame. Back the camera off
+        # along its own view axis to leave a margin.
+        corners = _bbw3d_trimesh.bounds.corners(mesh.bounds)
+        transform = np.array(
+            scene.camera.look_at(corners, rotation=rotation), dtype=float)
+        transform[:3, 3] += transform[:3, 2] * float(mesh.scale) * 0.12
+        scene.camera_transform = transform
+
+        png = scene.save_image(resolution=(self.config.width, self.config.height))'''
+
 #: name -> (file, broken text, fixed text, marker proving it is applied)
 PATCHES: list[dict] = [
     {
@@ -99,6 +158,17 @@ PATCHES: list[dict] = [
         "why": "the finally block overwrote result['output'], discarding the "
                "'No 3D shape found - assign to result' warning that explains why "
                "a successful-looking create stored nothing",
+    },
+    {
+        "name": "aim-3d-camera",
+        "file": "src/renderer.py",
+        "broken": CAMERA_UNSET,
+        "fixed": CAMERA_AIMED,
+        "marker": "Patched by BBW3D: aim the camera",
+        "why": "_render_3d_trimesh ignored its view argument and used trimesh's "
+               "default camera, which frames the model so close that it overflows "
+               "the frustum - /render/3d returned HTTP 200 and a valid PNG "
+               "containing one flat rectangle, indistinguishable from a failure",
     },
     {
         "name": "install-pyglet",

@@ -11,8 +11,31 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from patch_cad_agent import (NAMESPACE_BROKEN, NAMESPACE_FIXED,  # noqa: E402
-                             PATCHES, apply_patches)
+from patch_cad_agent import (CAMERA_AIMED, CAMERA_UNSET,  # noqa: E402
+                             NAMESPACE_BROKEN,
+                             NAMESPACE_FIXED, PATCHES, apply_patches)
+
+# The shape of renderer.py around the camera defect, as read from the live
+# checkout. Built from CAMERA_UNSET so the sample cannot drift from the patch.
+RENDERER_SOURCE = '''"""Stand-in for cad-agent's renderer module."""
+from pathlib import Path
+from typing import Any, Literal
+
+import numpy as np
+
+ViewAngle = Literal["front", "back", "left", "right", "top", "bottom", "iso"]
+VIEW_DIRECTIONS = {"front": (0, -1, 0), "top": (0, 0, 1), "iso": (1, -1, 0.8)}
+
+
+class Renderer:
+    def _shape_to_trimesh(self, shape):
+        return shape
+
+''' + CAMERA_UNSET + '''
+        with open(output_path, 'wb') as f:
+            f.write(png)
+        return output_path
+'''
 
 # The shape of cad_engine.py around the defect, as read from the live checkout.
 ENGINE_SOURCE = '''import io
@@ -172,6 +195,36 @@ class TestApplyPatches(unittest.TestCase):
         patched = self.engine.read_text()
         ast.parse(patched)
         self.assertIn('sys.stdout.getvalue() + result.get("output", "")', patched)
+
+    def test_third_patch_aims_the_3d_camera(self):
+        """The 'blank' 3D render was a camera framing one face, not a GL failure.
+
+        Upstream ignored `view` and used trimesh's default camera, which sits
+        so close that the near face overflows the frustum.
+        """
+        renderer = self.root / "src" / "renderer.py"
+        renderer.write_text(RENDERER_SOURCE, encoding="utf-8")
+
+        report = apply_patches(self.root)
+        self.assertIn("aim-3d-camera", [p["name"] for p in report["applied"]])
+
+        patched = renderer.read_text()
+        ast.parse(patched)
+        self.assertIn("camera.look_at", patched, "the model must be fitted to the frame")
+        self.assertIn("VIEW_DIRECTIONS.get(view", patched, "`view` must be honoured")
+        self.assertNotIn("mesh.scene().save_image(", patched,
+                         "the unaimed default-camera call must be gone")
+
+        second = apply_patches(self.root)
+        self.assertIn("aim-3d-camera", [p["name"] for p in second["already"]])
+        self.assertEqual(renderer.read_text(), patched, "second run changed the file")
+
+    def test_camera_patch_handles_the_degenerate_top_view(self):
+        """For top/bottom the eye vector is parallel to a naive 'up', which
+        would make the cross product zero and the camera basis NaN."""
+        self.assertIn('view in ("top", "bottom")', CAMERA_AIMED)
+        self.assertIn("> 0.999", CAMERA_AIMED,
+                      "a parallel up vector must be detected and replaced")
 
     def test_bare_pyglet_from_an_earlier_run_gets_pinned(self):
         """A checkout patched before the pin was known must be corrected."""
