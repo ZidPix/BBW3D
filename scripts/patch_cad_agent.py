@@ -100,6 +100,17 @@ PATCHES: list[dict] = [
                "'No 3D shape found - assign to result' warning that explains why "
                "a successful-looking create stored nothing",
     },
+    {
+        "name": "install-pyglet",
+        "file": "requirements.txt",
+        "append": "\n# Added by BBW3D: /render/3d and /render/multiview returned\n"
+                  "# HTTP 500, and the container reported\n"
+                  "#   render_error: No module named 'pyglet'\n"
+                  "# 2D renders (matplotlib) were unaffected.\npyglet\n",
+        "marker": "Added by BBW3D",
+        "why": "3D and multiview renders failed with \"No module named 'pyglet'\"; "
+               "without them there is no visual critique loop",
+    },
 ]
 
 
@@ -118,7 +129,12 @@ def apply_patches(root: Path, dry_run: bool = False) -> dict:
         entry = {"name": patch["name"], "file": patch["file"]}
 
         if not target.is_file():
-            report["failed"].append({**entry, "error": "file not found"})
+            # Not fatal: upstream may have moved or renamed it. Say so loudly
+            # rather than stopping the whole setup over a file that may not
+            # matter any more.
+            report["not_needed"].append(
+                {**entry, "note": "file not found - upstream layout may have "
+                                  "changed; this fix was NOT applied"})
             continue
 
         try:
@@ -131,19 +147,24 @@ def apply_patches(root: Path, dry_run: bool = False) -> dict:
             report["already"].append(entry)
             continue
 
-        if patch["broken"] not in text:
+        if "append" in patch:
+            # For files whose existing content we cannot match reliably, such as
+            # requirements.txt. The marker check above makes this idempotent.
+            patched = text.rstrip("\n") + "\n" + patch["append"]
+        elif patch["broken"] not in text:
             report["not_needed"].append(
                 {**entry, "note": "defect not found - upstream may have changed; "
                                   "verify by hand before trusting this checkout"})
             continue
+        else:
+            patched = text.replace(patch["broken"], patch["fixed"], 1)
 
-        patched = text.replace(patch["broken"], patch["fixed"], 1)
-
-        try:
-            ast.parse(patched)
-        except SyntaxError as exc:
-            report["failed"].append({**entry, "error": f"patch broke the file: {exc}"})
-            continue
+        if target.suffix == ".py":
+            try:
+                ast.parse(patched)
+            except SyntaxError as exc:
+                report["failed"].append({**entry, "error": f"patch broke the file: {exc}"})
+                continue
         if patch["marker"] not in patched:
             report["failed"].append({**entry, "error": "marker missing after patch"})
             continue

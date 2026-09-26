@@ -173,18 +173,40 @@ class TestApplyPatches(unittest.TestCase):
         ast.parse(patched)
         self.assertIn('sys.stdout.getvalue() + result.get("output", "")', patched)
 
-    def test_missing_file_is_reported_not_crashed_on(self):
+    def test_missing_file_is_reported_without_stopping_setup(self):
+        """Upstream moving a file must not hard-stop the whole run."""
         self.engine.unlink()
         report = apply_patches(self.root)
-        self.assertFalse(report["ok"])
-        self.assertIn("not found", report["failed"][0]["error"])
+        self.assertTrue(report["ok"])
+        notes = " ".join(p["note"] for p in report["not_needed"])
+        self.assertIn("file not found", notes)
+        self.assertIn("NOT applied", notes)
 
     def test_every_patch_declares_what_it_is_for(self):
         for patch in PATCHES:
             with self.subTest(patch=patch["name"]):
                 self.assertTrue(patch["why"])
-                self.assertIn(patch["marker"], patch["fixed"])
-                self.assertNotIn(patch["marker"], patch["broken"])
+                body = patch.get("fixed") or patch["append"]
+                self.assertIn(patch["marker"], body)
+                if "broken" in patch:
+                    self.assertNotIn(patch["marker"], patch["broken"])
+
+    def test_append_patch_is_idempotent_and_leaves_the_file_valid(self):
+        reqs = self.root / "requirements.txt"
+        reqs.write_text("build123d==0.5.0\nvtk\nmatplotlib\n", encoding="utf-8")
+
+        first = apply_patches(self.root)
+        self.assertIn("install-pyglet", [p["name"] for p in first["applied"]])
+        text = reqs.read_text()
+        self.assertIn("pyglet", text)
+        self.assertIn("build123d==0.5.0", text, "existing requirements preserved")
+
+        second = apply_patches(self.root)
+        self.assertIn("install-pyglet", [p["name"] for p in second["already"]])
+        self.assertEqual(reqs.read_text(), text, "second run changed the file")
+        requirement_lines = [l.strip() for l in text.splitlines()
+                             if l.strip() == "pyglet"]
+        self.assertEqual(len(requirement_lines), 1, "pyglet added twice")
 
 
 if __name__ == "__main__":
