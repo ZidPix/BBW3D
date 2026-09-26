@@ -84,9 +84,20 @@ function Resolve-Docker {
         "C:\Program Files"
     ) | Where-Object { $_ }
 
+    # Two layouts in the wild: the machine-wide installer puts it under
+    # Docker\Docker\resources\bin, while the "install for me only" build puts
+    # it under Programs\DockerDesktop\resources\bin in LOCALAPPDATA.
+    $subPaths = @(
+        "Docker\Docker\resources\bin\docker.exe",
+        "Programs\DockerDesktop\resources\bin\docker.exe",
+        "DockerDesktop\resources\bin\docker.exe"
+    )
+
     foreach ($root in $roots) {
-        $candidate = "$root\Docker\Docker\resources\bin\docker.exe"
-        if (Test-Path $candidate) { return $candidate }
+        foreach ($sub in $subPaths) {
+            $candidate = Join-Path $root $sub
+            if (Test-Path $candidate) { return $candidate }
+        }
     }
     if (Test-Path "C:\ProgramData\DockerDesktop\version-bin\docker.exe") {
         return "C:\ProgramData\DockerDesktop\version-bin\docker.exe"
@@ -120,7 +131,17 @@ if (-not $Docker) {
     Stop-With "docker.exe not found, on PATH or in the usual install locations." `
               "If Docker Desktop IS installed, open a NEW PowerShell window and re-run - Windows caches PATH per session, so a shell opened before the install cannot see it. Otherwise install Docker Desktop: https://docs.docker.com/desktop/install/windows-install/"
 }
-if ($Docker -ne "docker") { Write-Warn2 "docker not on PATH; using $Docker" }
+if ($Docker -ne "docker") {
+    Write-Warn2 "docker not on PATH; using $Docker"
+    # Using the absolute path is not enough. The CLI shells out to sibling
+    # executables by bare name - docker-credential-desktop for registry auth,
+    # and the compose/buildx plugins - so a build fails with
+    #   error getting credentials - err: exec: "docker-credential-desktop":
+    #   executable file not found in %PATH%
+    # unless that directory is on PATH for this process and its children.
+    $dockerDir = Split-Path -Parent $Docker
+    if ($env:PATH -notlike "*$dockerDir*") { $env:PATH = "$dockerDir;$env:PATH" }
+}
 
 & $Docker info *> $null
 if ($LASTEXITCODE -ne 0) {
