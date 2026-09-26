@@ -173,6 +173,17 @@ class TestApplyPatches(unittest.TestCase):
         ast.parse(patched)
         self.assertIn('sys.stdout.getvalue() + result.get("output", "")', patched)
 
+    def test_bare_pyglet_from_an_earlier_run_gets_pinned(self):
+        """A checkout patched before the pin was known must be corrected."""
+        reqs = self.root / "requirements.txt"
+        reqs.write_text("build123d\nvtk\n\n# Added by BBW3D: notes\npyglet\n",
+                        encoding="utf-8")
+        report = apply_patches(self.root)
+        self.assertIn("pin-pyglet-below-2", [p["name"] for p in report["applied"]])
+        lines = [l.strip() for l in reqs.read_text().splitlines()
+                 if l.strip().startswith("pyglet")]
+        self.assertEqual(lines, ["pyglet<2"])
+
     def test_missing_file_is_reported_without_stopping_setup(self):
         """Upstream moving a file must not hard-stop the whole run."""
         self.engine.unlink()
@@ -205,8 +216,9 @@ class TestApplyPatches(unittest.TestCase):
         self.assertIn("install-pyglet", [p["name"] for p in second["already"]])
         self.assertEqual(reqs.read_text(), text, "second run changed the file")
         requirement_lines = [l.strip() for l in text.splitlines()
-                             if l.strip() == "pyglet"]
-        self.assertEqual(len(requirement_lines), 1, "pyglet added twice")
+                             if l.strip().startswith("pyglet")]
+        self.assertEqual(requirement_lines, ["pyglet<2"],
+                         "pyglet must appear once, pinned below 2")
 
 
 if __name__ == "__main__":

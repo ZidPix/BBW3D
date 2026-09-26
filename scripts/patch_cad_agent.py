@@ -106,10 +106,23 @@ PATCHES: list[dict] = [
         "append": "\n# Added by BBW3D: /render/3d and /render/multiview returned\n"
                   "# HTTP 500, and the container reported\n"
                   "#   render_error: No module named 'pyglet'\n"
-                  "# 2D renders (matplotlib) were unaffected.\npyglet\n",
+                  "# Pinned below 2 because the render path is trimesh's windowed\n"
+                  "# viewer, whose API is 1.x: with pyglet 2.x installed it asks for\n"
+                  "#   `trimesh.viewer.windowed` requires `pip install \"pyglet<2\"`\n"
+                  "# 2D renders (matplotlib) were unaffected.\npyglet<2\n",
         "marker": "Added by BBW3D",
         "why": "3D and multiview renders failed with \"No module named 'pyglet'\"; "
                "without them there is no visual critique loop",
+    },
+    {
+        "name": "pin-pyglet-below-2",
+        "file": "requirements.txt",
+        "broken": "\npyglet\n",
+        "fixed": "\npyglet<2\n",
+        "marker": "pyglet<2",
+        "why": "an unpinned pyglet installs 2.x, but the render path is trimesh's "
+               "windowed viewer, which still uses the 1.x API and refuses with "
+               "\"requires pip install 'pyglet<2'\"",
     },
 ]
 
