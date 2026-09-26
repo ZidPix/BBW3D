@@ -102,6 +102,16 @@ Probe box (30×20×10) verified: volume 6000 mm³, surface 2200 mm², 6 faces,
   bare name and a build otherwise dies with
   `error getting credentials - exec: "docker-credential-desktop": executable
   file not found in %PATH%`.
+- **A container path is POSIX; parse it with `PurePosixPath`, never `Path`.**
+  On a Windows host `Path("/renders/iso.png")` is a `WindowsPath` whose
+  `is_absolute()` is **False** — Windows wants a drive letter — so a
+  mount-prefix check guarded by `is_absolute()` silently never runs, and
+  `root / candidate` then discards the root and probes `C:\renders\iso.png`.
+  This made every path-based asset come back empty on Windows while passing on
+  Linux. Use host `Path` only to touch the host filesystem.
+- Report paths are POSIX-relative (`src/cad_engine.py`). `str(PurePath)` gives
+  backslashes on Windows, and `repair_cad_agent.py` would then disagree with
+  `patch_cad_agent.py` about the name of the same file.
 - The `2>&1` rule applies to **how you invoke `setup.ps1`**, not just to code
   inside it. Piping the script through `Tee-Object` with `*>&1` re-creates the
   trap from outside: Docker's ordinary build progress on stderr becomes a
@@ -130,10 +140,9 @@ The way to tell a framing bug from a render bug is to read the **depth buffer**
 where the image looks blank — if it is not 1.0, the geometry was drawn and the
 camera is what is wrong.
 
-Known gap, pre-existing and unrelated to rendering: **6 tests fail**
-(`test_cad_client.TestExtractAssets` ×4, `test_repair_cad_agent.TestRepairTree`
-×2). `extract_assets` returns `[]` where the test expects the resolved
-`/renders` and `/workspace` mount paths. The base64 render path is unaffected,
-which is why verify passes. Diagnose before trusting on-disk asset extraction.
+All 94 tests pass. On-disk asset extraction is verified against the live
+container too: every render now returns **both** `path` and `base64`, with
+identical byte counts, so the file read off the bind mount is the same image
+the container encoded.
 
 Next: a first real design image through the full loop.
