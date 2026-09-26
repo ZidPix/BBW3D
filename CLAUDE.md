@@ -44,6 +44,21 @@ Defects found so far, all diagnosed from a running container:
    nothing. Patched to append.
 3. **`pyglet` missing, then unpinned** — 3D/multiview renders need
    `trimesh.viewer.windowed`, which uses the pyglet 1.x API. Pinned `pyglet<2`.
+4. **Every 3D render was an extreme close-up of one face** —
+   `_render_3d_trimesh` ignored its own `view` argument and called
+   `mesh.scene().save_image()` with trimesh's default camera, which looks
+   straight down -Y from so close that the near face overflows the frustum. The
+   PNG came back as one flat grey rectangle: HTTP 200, valid image, *looks*
+   exactly like a failed render. It was not — the geometry was drawn correctly
+   the whole time. Patched to aim the camera along `VIEW_DIRECTIONS[view]` and
+   fit the bounding corners with `camera.look_at`, plus a 12% margin.
+
+   Note the fallback chain in `render_3d`: VTK, then pyrender, then trimesh.
+   Neither `vtk` nor `pyrender` is in `requirements.txt`, so **only the trimesh
+   path ever runs** — the logs say `VTK failed (No module named 'vtk')` on every
+   single render. Do not chase that message; it is the normal path. Installing
+   pyrender is a dead end: it needs their patched PyOpenGL fork
+   (`OSMesaCreateContextAttribs` is absent from the released wheels).
 
 ## The API contract, as verified (not as documented)
 
@@ -60,7 +75,8 @@ live container; `src/bbw3d/cad_client.py` is the single place they are encoded.
 | Silent failure | `success: true` + `geometry: null` means **nothing was stored** |
 | `/render/blueprint` | **404** — documented but absent from this build |
 | `/render/2d` | works (matplotlib); returns `base64`, `path` and `view` |
-| `/render/3d`, `/render/multiview` | GL-backed; need `pyglet<2` |
+| `/render/3d`, `/render/multiview` | Work. Need `pyglet<2` **and** the camera patch below |
+| Blank-looking render | A flat one-colour PNG is **not** a GL failure — check the framing before the renderer |
 | Export | STL and STEP good. **3MF is suspect** — same byte count as the STL, so their exporter is probably writing STL content |
 
 Probe box (30×20×10) verified: volume 6000 mm³, surface 2200 mm², 6 faces,
@@ -79,6 +95,18 @@ Probe box (30×20×10) verified: volume 6000 mm³, surface 2200 mm², 6 faces,
   pins this; cad-agent is cloned with `core.autocrlf=false`.
 - `docker.exe` may be absent from a shell's PATH even when Docker Desktop is
   running — PATH is snapshotted at process start. `Resolve-Docker` handles it.
+  It also handles the **per-user install layout**,
+  `%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin`, which is where the
+  "install for me only" build puts it. Finding `docker.exe` is not enough:
+  its directory must go **on PATH**, because the CLI shells out to siblings by
+  bare name and a build otherwise dies with
+  `error getting credentials - exec: "docker-credential-desktop": executable
+  file not found in %PATH%`.
+- The `2>&1` rule applies to **how you invoke `setup.ps1`**, not just to code
+  inside it. Piping the script through `Tee-Object` with `*>&1` re-creates the
+  trap from outside: Docker's ordinary build progress on stderr becomes a
+  `NativeCommandError` and the run dies at the first build line. Call the script
+  plainly and let it write to the console.
 
 ## House rules
 
@@ -91,10 +119,21 @@ Probe box (30×20×10) verified: volume 6000 mm³, surface 2200 mm², 6 faces,
 
 ## Where things stand
 
-Working end to end: create → measure → printability → export (STL/STEP), plus
-2D renders. Outstanding: `/render/3d` and `/render/multiview`, pending the
-`pyglet<2` rebuild. If they still fail on GL context creation, try
-`LIBGL_ALWAYS_SOFTWARE=1` in `docker-compose.yml`, or point their renderer at an
-offscreen path instead of the windowed viewer.
+Working end to end: create → measure → printability → export (STL/STEP), 2D
+renders, **and 3D + multiview renders** — verified by eye, not just by exit
+code: the probe box comes back as a shaded iso solid, framed with a margin.
 
-Next after that: a first real design image through the full loop.
+The GL stack was never the problem. For the record, in case a render looks
+wrong again: Xvfb is running (`/tmp/.X11-unix/X99`), Mesa gives GL 4.5 via
+llvmpipe, the depth buffer is 32-bit, and pyglet vertex lists draw correctly.
+The way to tell a framing bug from a render bug is to read the **depth buffer**
+where the image looks blank — if it is not 1.0, the geometry was drawn and the
+camera is what is wrong.
+
+Known gap, pre-existing and unrelated to rendering: **6 tests fail**
+(`test_cad_client.TestExtractAssets` ×4, `test_repair_cad_agent.TestRepairTree`
+×2). `extract_assets` returns `[]` where the test expects the resolved
+`/renders` and `/workspace` mount paths. The base64 render path is unaffected,
+which is why verify passes. Diagnose before trusting on-disk asset extraction.
+
+Next: a first real design image through the full loop.
