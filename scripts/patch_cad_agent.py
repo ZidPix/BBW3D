@@ -181,6 +181,44 @@ HEADER_FIXED = "\n".join((
     '    <div class="main">',
 ))
 
+# ---------------------------------------------------------------------------
+# Patch 5: a stale X lock makes every 3D render fail after a host restart
+#
+# start_xvfb guards on `pgrep -x Xvfb`, which is the wrong question. /tmp lives
+# in the container's own filesystem, so on a RESTART (as opposed to a fresh
+# `docker run`) the previous run's /tmp/.X99-lock and /tmp/.X11-unix/X99 are
+# still there while the Xvfb process is long gone. Xvfb then refuses to start
+# with "Server is already active for display 99", DISPLAY points at nothing,
+# and /render/3d and /render/multiview answer HTTP 500:
+#
+#     pyglet.canvas.xlib.NoSuchDisplayException: Cannot connect to "None"
+#
+# 2D renders keep working (matplotlib needs no X), so the container looks
+# healthy. Clear the stale lock and socket before starting.
+# ---------------------------------------------------------------------------
+
+XVFB_UNGUARDED = '''start_xvfb() {
+    if ! pgrep -x Xvfb > /dev/null; then
+        echo "Starting Xvfb virtual framebuffer..." >&2
+        Xvfb :99 -screen 0 1280x1024x24 &>/dev/null &
+        sleep 0.5
+    fi
+    export DISPLAY=:99
+}'''
+
+XVFB_CLEANED = '''start_xvfb() {
+    if ! pgrep -x Xvfb > /dev/null; then
+        # Patched by BBW3D: clear a stale lock from a previous run of THIS
+        # container. /tmp survives a restart, so .X99-lock outlives the Xvfb
+        # process and Xvfb then refuses with "Server is already active".
+        rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+        echo "Starting Xvfb virtual framebuffer..." >&2
+        Xvfb :99 -screen 0 1280x1024x24 &>/dev/null &
+        sleep 0.5
+    fi
+    export DISPLAY=:99
+}'''
+
 #: name -> (file, broken text, fixed text, marker proving it is applied)
 PATCHES: list[dict] = [
     {
@@ -201,6 +239,17 @@ PATCHES: list[dict] = [
         "why": "the finally block overwrote result['output'], discarding the "
                "'No 3D shape found - assign to result' warning that explains why "
                "a successful-looking create stored nothing",
+    },
+    {
+        "name": "clear-stale-xvfb-lock",
+        "file": "entrypoint.sh",
+        "broken": XVFB_UNGUARDED,
+        "fixed": XVFB_CLEANED,
+        "marker": "Patched by BBW3D: clear a stale lock",
+        "why": "/tmp survives a container restart, so the previous run's "
+               ".X99-lock outlives its Xvfb process; Xvfb then refuses to start "
+               "and every 3D/multiview render returns HTTP 500 with "
+               "NoSuchDisplayException while 2D renders still work",
     },
     {
         "name": "repair-viewer-header",

@@ -299,6 +299,38 @@ class TestApplyPatches(unittest.TestCase):
         self.assertNotIn("main", seen.classes,
                          "the defect is that .main is never created")
 
+    def test_xvfb_patch_clears_a_stale_lock(self):
+        """3D renders died after every host restart, and 2D kept working.
+
+        /tmp lives in the container's own filesystem, so a restart leaves the
+        previous run's .X99-lock behind with no Xvfb process. Xvfb then
+        refuses to start and DISPLAY points at nothing.
+        """
+        from patch_cad_agent import XVFB_UNGUARDED
+
+        entry = self.root / "entrypoint.sh"
+        entry.write_text("#!/bin/bash\nset -e\n\n" + XVFB_UNGUARDED +
+                         '\n\ncase "$1" in\n  serve) start_xvfb;;\nesac\n',
+                         encoding="utf-8")
+
+        report = apply_patches(self.root)
+        self.assertIn("clear-stale-xvfb-lock", [p["name"] for p in report["applied"]])
+
+        patched = entry.read_text()
+        self.assertIn("rm -f /tmp/.X99-lock", patched,
+                      "the stale lock must be cleared")
+        self.assertIn("/tmp/.X11-unix/X99", patched,
+                      "the stale socket must be cleared too")
+        # the clear has to happen BEFORE Xvfb is launched, or it achieves nothing
+        self.assertLess(patched.index("rm -f /tmp/.X99-lock"),
+                        patched.index("Xvfb :99 -screen"),
+                        "the lock must be removed before Xvfb starts")
+        self.assertIn("export DISPLAY=:99", patched, "DISPLAY must still be set")
+
+        second = apply_patches(self.root)
+        self.assertIn("clear-stale-xvfb-lock", [p["name"] for p in second["already"]])
+        self.assertEqual(entry.read_text(), patched, "second run changed the file")
+
     def test_camera_patch_handles_the_degenerate_top_view(self):
         """For top/bottom the eye vector is parallel to a naive 'up', which
         would make the cross product zero and the camera basis NaN."""
