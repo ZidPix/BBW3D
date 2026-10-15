@@ -118,6 +118,47 @@ Probe box (30×20×10) verified: volume 6000 mm³, surface 2200 mm², 6 faces,
   `NativeCommandError` and the run dies at the first build line. Call the script
   plainly and let it write to the console.
 
+- **`py script.py` dispatches on the shebang.** The Windows launcher reads
+  `#!/usr/bin/env python3` and may hand the script to a different interpreter
+  than `py -c` uses — ours lands on one with no numpy, so a script that imports
+  fine interactively dies with `ModuleNotFoundError`. Run tool scripts with
+  **`python script.py`** (or `py -3.14`).
+
+## tools/ — local mesh pipeline, no container needed
+
+`tools/meshprep.py` turns image-to-3D output into something a slicer accepts:
+orient, drop debris, repair, scale. Dependencies in `tools/requirements.txt`;
+it is **not** part of the `bbw3d` package, which stays stdlib-only.
+
+```bash
+python tools/meshprep.py model.glb -o model.stl --height 100
+```
+
+Adapted from [3Dify](https://github.com/ThatButters/3Dify) (MIT). What matters:
+
+- **Order beats cleverness.** Drop stray components *before* repairing, and
+  include `fix_winding`. That alone closed the Funko mesh that earlier resisted
+  `fill_holes` — the 2 non-manifold edges we shipped with were avoidable.
+- **`pymeshfix` is the fallback** when trimesh genuinely cannot close a mesh.
+  It fixed the original CORACAO heart (2 non-manifold edges) while holding size
+  to 0.01 mm. Use it only as an escalation: it rebuilds the mesh and can move
+  detail. API note: results are `.points`/`.faces` on pymeshfix >= 0.16, and
+  **never touch `.mesh`** — that property imports pyvista.
+- **Orient by the known convention, never by the bounding box.** Hunyuan3D and
+  most image-to-3D models emit Y-up, so rotate +90° about X. "The longest axis
+  is up" happens to work for a standing figure and silently lies for anything
+  wider than it is tall.
+
+**build123d runs natively on Windows** (`pip install build123d`, verified on
+Python 3.14 with OCP wheels). The container is no longer required for CAD —
+the heart flag was built entirely locally. Two traps it brought:
+
+- `Polyline(close=True)` does **not** bridge a traced contour's end gap;
+  `make_face` then fails, and inside a `loft` it silently builds a solid 19%
+  too big. Append the first point explicitly.
+- `loft()` defaults to a **smooth** interpolation that bulges past its
+  sections. Use `loft(ruled=True)` when the sections define the real extents.
+
 ## House rules
 
 - Endpoint paths and payload keys live **only** in `src/bbw3d/cad_client.py`.
