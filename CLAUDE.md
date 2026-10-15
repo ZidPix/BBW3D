@@ -44,7 +44,18 @@ Defects found so far, all diagnosed from a running container:
    nothing. Patched to append.
 3. **`pyglet` missing, then unpinned** — 3D/multiview renders need
    `trimesh.viewer.windowed`, which uses the pyglet 1.x API. Pinned `pyglet<2`.
-4. **Every 3D render was an extreme close-up of one face** —
+4. **A stale X lock killed 3D renders after every host restart** —
+   `start_xvfb` guards on `pgrep -x Xvfb`, which asks the wrong question.
+   `/tmp` lives in the container's own filesystem, so on a **restart** the
+   previous run's `/tmp/.X99-lock` and `/tmp/.X11-unix/X99` are still there
+   with the Xvfb process long gone. Xvfb refuses ("Server is already active
+   for display 99"), `DISPLAY` points at nothing, and `/render/3d` and
+   `/render/multiview` return HTTP 500 with
+   `NoSuchDisplayException: Cannot connect to "None"`. **2D renders keep
+   working** (matplotlib needs no X), so the container looks healthy and
+   `/health` is green — which is exactly what makes it confusing. Patched to
+   clear the lock and socket before starting Xvfb.
+5. **Every 3D render was an extreme close-up of one face** —
    `_render_3d_trimesh` ignored its own `view` argument and called
    `mesh.scene().save_image()` with trimesh's default camera, which looks
    straight down -Y from so close that the near face overflows the frustum. The
@@ -118,6 +129,15 @@ Probe box (30×20×10) verified: volume 6000 mm³, surface 2200 mm², 6 faces,
   `NativeCommandError` and the run dies at the first build line. Call the script
   plainly and let it write to the console.
 
+- **Docker Desktop can crash on a stale IPC socket, and blame something else.**
+  After an unclean shutdown it may refuse to start with
+  `initializing Secrets Engine: rename .../docker-secrets-engine/engine.sock
+  -> engine.sock.stale: The file cannot be accessed by the system`. The GUI
+  shows a generic "unexpected error"; the real cause is only in
+  `%LOCALAPPDATA%\Docker\log\host\com.docker.backend.exe.log`. `Remove-Item`
+  fails on that orphaned reparse point too — **rename the parent folder**
+  aside instead and let Docker recreate it. Unrelated to virtualization, and
+  easy to misdiagnose as such when both are broken at once.
 - **`py script.py` dispatches on the shebang.** The Windows launcher reads
   `#!/usr/bin/env python3` and may hand the script to a different interpreter
   than `py -c` uses — ours lands on one with no numpy, so a script that imports
