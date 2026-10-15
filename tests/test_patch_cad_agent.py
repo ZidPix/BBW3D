@@ -129,13 +129,24 @@ class TestTheFix(unittest.TestCase):
         self.assertNotIn("__import__", namespace["__builtins__"])
 
     def test_missing_build123d_still_reports_clearly(self):
-        sys.modules.pop("build123d", None)
-        namespace: dict = {"__builtins__": dict(SAFE_BUILTINS)}
-        body = "\n".join(line[8:] if line.startswith("        ") else line
-                         for line in NAMESPACE_FIXED.splitlines())
-        with self.assertRaises(RuntimeError) as ctx:
-            exec(body, {"namespace": namespace}, {"namespace": namespace})
-        self.assertIn("build123d not available", str(ctx.exception))
+        # Force the ImportError instead of relying on build123d being absent
+        # from this machine: it IS installed locally now (tools/ uses it), and
+        # popping it from sys.modules just lets the real import succeed.
+        # None in sys.modules makes `import build123d` raise ImportError.
+        previous = sys.modules.get("build123d", "<unset>")
+        sys.modules["build123d"] = None
+        try:
+            namespace: dict = {"__builtins__": dict(SAFE_BUILTINS)}
+            body = "\n".join(line[8:] if line.startswith("        ") else line
+                             for line in NAMESPACE_FIXED.splitlines())
+            with self.assertRaises(RuntimeError) as ctx:
+                exec(body, {"namespace": namespace}, {"namespace": namespace})
+            self.assertIn("build123d not available", str(ctx.exception))
+        finally:
+            if previous == "<unset>":
+                sys.modules.pop("build123d", None)
+            else:
+                sys.modules["build123d"] = previous
 
 
 class TestApplyPatches(unittest.TestCase):
