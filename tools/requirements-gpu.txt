@@ -1,0 +1,38 @@
+# Local image-to-3D (tools/shape_gen.py). Separate from requirements.txt:
+# this needs a CUDA GPU and ~7.4 GB of weights, and nothing else in the repo
+# depends on it.
+#
+# Use a dedicated venv - these versions fight with everything else:
+#   python -m venv .venv-gpu
+#   .venv-gpu/Scripts/python -m pip install torch torchvision \
+#       --index-url https://download.pytorch.org/whl/cu130
+#   .venv-gpu/Scripts/python -m pip install -r tools/requirements-gpu.txt
+#
+# Then clone Tencent's repo beside it and point BBW3D_HY3D_ROOT at the parent:
+#   git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1
+#
+# torch/torchvision come from the cu130 index above, not from here.
+diffusers
+transformers           # 5.x is fine; shape_gen remaps the old checkpoint keys
+accelerate             # provides the cpu_offload hooks that make 8 GB work
+safetensors
+huggingface-hub
+einops
+omegaconf
+trimesh
+pillow
+tqdm
+pyyaml
+scikit-image
+opencv-python
+pygltflib
+rembg                  # cuts the subject out; without it you get a ground slab
+onnxruntime
+pymeshlab              # imported unconditionally by hy3dshape, not in their list
+timm                   # ditto
+torchdiffeq
+peft
+# NOT needed, despite appearing in Tencent's requirements:
+#   xatlas  - UV unwrapping, texture-only, and has no Python 3.14 wheel. It
+#             fails to build and takes the whole pip batch down with it.
+#   diso    - only for mc_algo='dmc'; the pipeline defaults to 'mc'.
