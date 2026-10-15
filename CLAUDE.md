@@ -179,6 +179,71 @@ the heart flag was built entirely locally. Two traps it brought:
 - `loft()` defaults to a **smooth** interpolation that bulges past its
   sections. Use `loft(ruled=True)` when the sections define the real extents.
 
+## tools/shape_gen.py — image to 3D, local, no credits
+
+Hunyuan3D 2.1 shape generation on the RTX 4060. Replaces the hosted
+image-to-3D step entirely.
+
+```bash
+python tools/shape_gen.py image.png -o out.glb --octree-res 256 --steps 30
+python tools/meshprep.py out.glb --height 95 -o model.stl
+```
+
+Measured against the hosted service on the same input image:
+
+| | hosted | local |
+|---|---|---|
+| cost | 20 credits | **0** |
+| time | ~3 min | **83 s** |
+| faces | 123,922 | 272,040 |
+| size | 54.8 x 49.6 x 95.0 | 53.6 x 46.8 x 95.0 |
+| watertight | no | **yes** |
+
+**It fits in 8 GB, but only with offload.** Tencent's README says 10 GB for
+shape generation, and that is honest for a straight load: the fp16 weights are
+7.37 GB and `from_pretrained(device='cuda')` leaves **0.00 GB free** before
+generation starts. Load to CPU, call `enable_model_cpu_offload()`, and the real
+peak is **6.45 GB** of the ~6.9 free. The cost is PCIe traffic. Texture
+generation is not attempted — it wants 21 GB, and colour comes from the
+four-part split anyway.
+
+Eight things had to be fixed to get there, and **none of them was VRAM**:
+
+1. `pymeshlab` and `timm` are imported unconditionally but missing from
+   `hy3dshape/requirements.txt`.
+2. **`xatlas` has no Python 3.14 wheel**, fails to build, and takes the whole
+   pip batch down with it — so four unrelated packages looked missing when only
+   one was. It is texture-only; drop it.
+3. `diso` likewise needs compiling, and is only used by `mc_algo='dmc'`. The
+   pipeline defaults to `'mc'`, so skip it.
+4. `use_safetensors=True` makes the loader look for a `.safetensors` that does
+   not exist — 2.1 ships `model.fp16.ckpt`. The error says "Model file ... not
+   found", which reads as a failed download when the 7.37 GB are already there.
+5. transformers renamed the Dinov2 attention submodules between 4.x and 5.x
+   (`attention.attention.query` -> `attention.q_proj`, and three more). The
+   checkpoint predates that, so ~192 keys are remapped on the fly rather than
+   pinning transformers 4.46.
+6. **Their `enable_model_cpu_offload()` is broken**: lifted from diffusers, it
+   reads `self.components`, which their class never defines. Supply the property.
+7. After offload `self.device` is still `cpu`, so latents are built on the CPU
+   while the model returns cuda tensors. Force `pipe.device` to cuda.
+8. `Image.convert("RGBA")` only ADDS an opaque alpha channel. Their demo runs
+   rembg only when `mode == 'RGB'`, so a fake-RGBA image skips the cutout and
+   the model reads a white background as a floor — **generating a ground slab
+   fused to the figure's feet**. The hosted service cuts the background out
+   silently; self-hosting means doing it yourself.
+
+**Licence**: Tencent Hunyuan Community License. Commercial use is fine below
+1M MAU, but the licence — and the **output** — does not apply in the EU, UK or
+South Korea. Confirm where the work is being done before relying on it.
+
+Environment lives outside the repo (`~/dev/hy3d` by default, override with
+`BBW3D_HY3D_ROOT`): its own venv, the Hunyuan3D checkout and ~7.4 GB of
+weights. See `tools/requirements-gpu.txt`.
+
+Still hosted: the 2D turnaround art (~0.25 credits). That would need ComfyUI
+with SDXL or Flux locally.
+
 ## House rules
 
 - Endpoint paths and payload keys live **only** in `src/bbw3d/cad_client.py`.
