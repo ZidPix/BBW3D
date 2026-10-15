@@ -1,0 +1,9 @@
+# Local mesh tooling. NOT required by the bbw3d package, which is
+# deliberately stdlib-only - see the house rules in CLAUDE.md.
+#
+#   python -m pip install -r tools/requirements.txt
+#
+trimesh>=4.0
+numpy>=2.0
+scipy>=1.11
+pymeshfix>=0.16        # fallback repair when trimesh cannot close a mesh
