@@ -241,8 +241,43 @@ Environment lives outside the repo (`~/dev/hy3d` by default, override with
 `BBW3D_HY3D_ROOT`): its own venv, the Hunyuan3D checkout and ~7.4 GB of
 weights. See `tools/requirements-gpu.txt`.
 
-Still hosted: the 2D turnaround art (~0.25 credits). That would need ComfyUI
-with SDXL or Flux locally.
+## tools/art_gen.py — reference image to a 3D-ready view, local
+
+SDXL plus IP-Adapter, feeding `shape_gen.py`. This was the last hosted step.
+
+```bash
+python tools/art_gen.py ref.png -o view.png --describe "..."
+python tools/shape_gen.py view.png -o out.glb
+```
+
+Peak **6.08 GB** VRAM with `enable_model_cpu_offload()`. One view, not a
+three-view turnaround: `shape_gen` takes a single image, and one good view is
+far more tractable than three that must agree with each other.
+
+Two defects found the hard way, both now pinned by `tests/test_art_gen.py`:
+
+1. **CLIP truncates at 77 tokens, silently.** A combined style-plus-character
+   prompt ran to 153, so everything after the character was discarded —
+   renders came back with a tinted background, a drop shadow and the feet cut
+   off, and nothing in the output said why. SDXL conditions on **two** text
+   encoders, so the subject goes to `prompt` and the framing to `prompt_2`.
+   The script now prints each prompt's token count and flags `<-- TRUNCATED`.
+2. `pipe.enable_vae_slicing()` no longer exists; diffusers moved it to
+   `pipe.vae.enable_slicing()`. The old call raised `AttributeError` **after**
+   the weights had loaded, wasting the whole run.
+
+**`--ip-scale` is the parameter that decides everything**, and the trade is
+real: high drags towards the reference's own style, low loses the likeness.
+Defaults are 0.9 faithful / 0.5 funko.
+
+**Know what this is for.** Reproducing an existing character is the wrong job
+for it — regenerating Tyler lost his horns at every scale tried. When a
+subject already has artwork, feed that artwork to `shape_gen` directly; it is
+a better input than anything this will synthesise. `art_gen` earns its place
+when there is no original, e.g. a Funko-style figure from a photograph.
+
+Feed `shape_gen` a PNG with **real alpha**. `convert("RGBA")` only adds an
+opaque channel, and an opaque background is read as a floor.
 
 ## House rules
 
